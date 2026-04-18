@@ -1,0 +1,31 @@
+market:
+  exchange: SSE
+  buy_time: "14:30"
+  stabilization_start_time: "14:00"
+  intrabar_order: "ohlc"
+
+entry:
+  buy_on_nth_trading_day_after_detect: 1
+  pullback_fraction: 0.5
+  pullback_reference: body
+  volume_fraction: 0.75
+  lower_shadow_ratio: 1.5
+  close_in_upper_half: true
+
+risk:
+  initial_stop_loss_pct: 0.05
+  gap_fill_stop_buffer_pct: 0.01
+  raise_stop_at_1r_to_entry: true
+  raise_stop_at_2r_to_entry_plus_1r: true
+
+exit:
+  ma_window: 10
+  consecutive_close_below_ma_days: 2
+  timeout_hold_days: 10
+  timeout_target_r: 0.5
+  simulation_max_days_after_entry: 20
+
+data:
+  minute_freq: 1min
+  cache_dir: data/cache
+  output_dir: outputs
