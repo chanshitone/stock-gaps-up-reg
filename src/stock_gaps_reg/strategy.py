@@ -56,40 +56,42 @@ def _compute_pullback_ratio(detect_row: pd.Series, buy_price: float, reference_m
 def _has_long_lower_shadow(
     minute_frame: pd.DataFrame,
     trade_date: date,
-    start_time: str,
     min_ratio: float,
     close_in_upper_half: bool,
 ) -> bool:
-    window = _minute_slice(minute_frame, trade_date, start_time=start_time, end_time="14:30")
+    window = _minute_slice(minute_frame, trade_date, start_time="09:30", end_time="14:30")
     if window.empty:
         return False
     candle_open = float(window.iloc[0]["open"])
     candle_close = float(window.iloc[-1]["close"])
     candle_high = float(window["high"].max())
     candle_low = float(window["low"].min())
-    body = abs(candle_close - candle_open)
     lower_shadow = min(candle_open, candle_close) - candle_low
     full_range = candle_high - candle_low
     if full_range <= 0:
         return False
-    if body == 0:
-        body = full_range * 0.1
-    if close_in_upper_half and (candle_close - candle_low) / full_range < 0.5:
+    if close_in_upper_half and candle_close < (candle_high + candle_low) / 2:
         return False
-    return lower_shadow / body >= min_ratio
+    return lower_shadow / full_range >= min_ratio
 
 
 def _stabilized_after_1400(minute_frame: pd.DataFrame, trade_date: date, start_time: str) -> bool:
+    session = _minute_slice(minute_frame, trade_date, start_time="09:30", end_time="14:30")
     window = _minute_slice(minute_frame, trade_date, start_time=start_time, end_time="14:30")
-    if window.empty:
+    if session.empty or window.empty:
         return False
-    start_price = float(window.iloc[0]["open"])
-    last_price = float(window.iloc[-1]["close"])
-    low_after_start = float(window["low"].min())
-    low_index = int(window["low"].idxmin())
-    lows_after_low = window.loc[low_index + 1 :, "low"]
-    no_new_low = lows_after_low.empty or bool((lows_after_low >= low_after_start).all())
-    return last_price >= start_price and no_new_low
+    session = session.copy()
+    cumulative_volume = session["vol"].cumsum()
+    session["vwap"] = (session["close"] * session["vol"]).cumsum() / cumulative_volume.where(cumulative_volume > 0)
+
+    window = window.merge(session[["trade_time", "vwap"]], on="trade_time", how="left")
+    if window["vwap"].isna().any():
+        return False
+
+    above_vwap_fraction = float((window["close"] > window["vwap"]).mean())
+    last_close = float(window.iloc[-1]["close"])
+    last_vwap = float(window.iloc[-1]["vwap"])
+    return above_vwap_fraction >= 0.9 and last_close > last_vwap
 
 
 def _gap_unfilled(prev_high: float, minute_frame: pd.DataFrame, trade_date: date, end_time: str) -> bool:
@@ -188,7 +190,6 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     has_long_lower_shadow = _has_long_lower_shadow(
         buy_minutes,
         buy_date,
-        config.market.stabilization_start_time,
         config.entry.lower_shadow_ratio,
         config.entry.close_in_upper_half,
     )
@@ -199,10 +200,20 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     )
     gap_unfilled = _gap_unfilled(float(prev_row["high"]), buy_minutes, buy_date, config.market.buy_time)
 
+    _detect_open = float(detect_row["open"])
+    _detect_close = float(detect_row["close"])
+    _detect_high = float(detect_row["high"])
+    _detect_low = float(detect_row["low"])
+    _detect_range = _detect_high - _detect_low
+    day1_change_pct = (_detect_close - _detect_open) / _detect_open if _detect_open > 0 else 0.0
+    day1_close_strength = (_detect_close - _detect_low) / _detect_range if _detect_range > 0 else 0.0
+
     volume_ok = day2_volume_1430 < detect_day_volume * config.entry.volume_fraction
     price_ok = pullback_ratio <= config.entry.pullback_fraction
     behavior_ok = has_long_lower_shadow or stabilized_after_1400
-    eligible = price_ok and volume_ok and behavior_ok and gap_unfilled
+    day1_change_ok = day1_change_pct >= config.entry.day1_min_change_pct
+    day1_close_strength_ok = day1_close_strength >= config.entry.day1_min_close_strength
+    eligible = price_ok and volume_ok and behavior_ok and gap_unfilled and day1_change_ok and day1_close_strength_ok
 
     notes = {
         "buy_date": buy_date,
@@ -220,6 +231,8 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
         "stabilized_after_1400": stabilized_after_1400,
         "gap_unfilled": gap_unfilled,
         "gap_size": float(detect_row["low"] - prev_row["high"]),
+        "day1_change_pct": day1_change_pct,
+        "day1_close_strength": day1_close_strength,
     }
 
     if not eligible:
@@ -232,11 +245,13 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
             failed.append("reversal_rule")
         if not gap_unfilled:
             failed.append("gap_fill_rule")
+        if not day1_change_ok:
+            failed.append("day1_change_rule")
+        if not day1_close_strength_ok:
+            failed.append("day1_close_strength_rule")
         return EntryDecision(eligible=False, reason=";".join(failed), **notes)
 
-    stop_by_pct = buy_price * (1 - config.risk.initial_stop_loss_pct)
-    stop_by_gap = float(prev_row["high"]) * (1 - config.risk.gap_fill_stop_buffer_pct)
-    initial_stop = max(stop_by_pct, stop_by_gap)
+    initial_stop = buy_price * (1 - config.risk.initial_stop_loss_pct)
     initial_r = buy_price - initial_stop
     if initial_r <= 0:
         return EntryDecision(eligible=False, reason="invalid_initial_r", **notes)
@@ -256,28 +271,18 @@ def _apply_intrabar_path(
     low_price: float,
     close_price: float,
     current_stop: float,
-    one_r_target: float,
-    two_r_target: float,
-    buy_price: float,
-    initial_r: float,
     intrabar_order: str,
-    raise_at_1r: bool,
-    raise_at_2r: bool,
 ) -> tuple[float, float | None]:
+    """Check whether any intrabar checkpoint hits the stop. Stop raises are handled separately via daily close."""
     if intrabar_order == "olhc":
         checkpoints = [open_price, low_price, high_price, close_price]
     else:
         checkpoints = [open_price, high_price, low_price, close_price]
 
-    stop = current_stop
     for price in checkpoints:
-        if raise_at_2r and price >= two_r_target and stop < buy_price + initial_r:
-            stop = buy_price + initial_r
-        elif raise_at_1r and price >= one_r_target and stop < buy_price:
-            stop = buy_price
-        if price <= stop:
-            return stop, stop
-    return stop, None
+        if price <= current_stop:
+            return current_stop, current_stop
+    return current_stop, None
 
 
 def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyConfig, client: TushareClient) -> TradeResult:
@@ -301,15 +306,14 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
     initial_r = float(entry.initial_r)
     future_days = _trade_days_after(client, buy_date, config.exit.simulation_max_days_after_entry + 2)
     end_date = future_days[-1]
-    daily = client.get_daily_with_ma(candidate.ts_code, buy_date, end_date, config.exit.ma_window)
+    daily = client.get_daily_with_ma(candidate.ts_code, buy_date, end_date, config.exit.ma_window, config.exit.vol_spike_ma_window)
 
     stop_price = initial_stop
-    one_r_target = buy_price + initial_r
-    two_r_target = buy_price + 2 * initial_r
     half_r_target = buy_price + config.exit.timeout_target_r * initial_r
     peak_stop_price = stop_price
     max_high = buy_price
     min_low = buy_price
+    max_close_since_entry = buy_price
     reached_half_r = False
     consecutive_below_ma = 0
     scheduled_open_exit: tuple[date, str] | None = None
@@ -370,13 +374,7 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
                 low_price,
                 close_price,
                 stop_price,
-                one_r_target,
-                two_r_target,
-                buy_price,
-                initial_r,
                 config.market.intrabar_order,
-                config.risk.raise_stop_at_1r_to_entry,
-                config.risk.raise_stop_at_2r_to_entry_plus_1r,
             )
             peak_stop_price = max(peak_stop_price, stop_price)
             if triggered_exit is not None:
@@ -386,7 +384,7 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
                     exit_date=trade_day,
                     exit_time=row.trade_time.to_pydatetime(),
                     exit_price=float(triggered_exit),
-                    exit_reason="trailing_stop",
+                    exit_reason="fixed_stop",
                     hold_sessions=index + 1,
                     max_high=max_high,
                     min_low=min_low,
@@ -394,6 +392,8 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
                 )
 
         daily_row = _lookup_row_by_date(daily, trade_day)
+        today_close = float(daily_row["close"])
+
         ma_value = float(daily_row["ma"]) if pd.notna(daily_row["ma"]) else float("nan")
         if not isnan(ma_value) and float(daily_row["close"]) < ma_value:
             consecutive_below_ma += 1
@@ -402,6 +402,14 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
 
         if consecutive_below_ma >= config.exit.consecutive_close_below_ma_days:
             scheduled_open_exit = (future_days[index + 1], "two_close_below_ma5")
+
+        today_vol = float(daily_row["vol"]) if pd.notna(daily_row["vol"]) else float("nan")
+        vol_ma_value = float(daily_row["vol_ma"]) if pd.notna(daily_row["vol_ma"]) else float("nan")
+        is_vol_spike = not isnan(vol_ma_value) and not isnan(today_vol) and today_vol > config.exit.vol_spike_ratio * vol_ma_value
+        is_no_advance = today_close <= max_close_since_entry
+        if is_vol_spike and is_no_advance and scheduled_open_exit is None:
+            scheduled_open_exit = (future_days[index + 1], "vol_spike_no_advance")
+        max_close_since_entry = max(max_close_since_entry, today_close)
 
         hold_days = index + 1
         if hold_days >= config.exit.timeout_hold_days and not reached_half_r and scheduled_open_exit is None:

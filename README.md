@@ -13,7 +13,7 @@ Entry logic on the second trading day after the detect date:
 - 14:30 market-entry proxy using the `14:30` 1-minute close
 - Pullback depth must stay within the configured fraction of the detect-day move
 - day2 14:30 cumulative volume must be below the configured fraction of detect-day full-session volume
-- Must show either a long lower shadow or a `14:00-14:30` stabilization pattern: `14:30 close >= 14:00 open` and no lower low after the post-`14:00` low is made
+- Must show either a long lower shadow from the `09:30-14:30` window or a `14:00-14:30` stabilization pattern based on intraday VWAP: at least 90% of 1-minute closes are above VWAP, and the `14:30` close is above VWAP
 - Gap must remain unfilled by `14:30`
 
 Exit logic:
@@ -59,7 +59,7 @@ ts_code,detect_date,note
 ## Run
 
 ```bash
-python run_backtest.py --candidates inputs/candidates.sample.csv
+python run_backtest.py --candidates inputs/candidates_b.csv
 ```
 
 Reports are written to `outputs/<timestamp>/`.
@@ -79,8 +79,8 @@ This script writes `details.csv` and `summary.csv` under `outputs/detect_window_
 - `14:30 market price` is approximated with the `14:30` 1-minute bar close from `stk_mins`.
 - Pullback depth defaults to `(detect_close - buy_price) / detect_day_body`. If detect-day body is not positive, the script falls back to detect-day high-low range.
 - `gap not filled` is interpreted as `day2 intraday low > previous trading day high`.
-- `long lower shadow` is approximated from the `14:00-14:30` intraday window.
-- `stabilized after 14:00` means the `14:30` close is at or above the `14:00` open, and once the lowest low after `14:00` is set, later bars do not print a lower low before `14:30`.
+- `long lower shadow` is approximated from the `09:30-14:30` intraday window and passes when `(lower_shadow / range) >= 0.4` and `close >= (high + low) / 2`.
+- `stabilized after 14:00` means that in the `14:00-14:30` window, at least 90% of 1-minute closes are above the session VWAP, where VWAP is computed cumulatively from `09:30` through each minute as `sum(close_i * vol_i) / sum(vol_i)`, and the `14:30` close must also be above the `14:30` VWAP.
 - Intrabar order defaults to `O -> H -> L -> C`. You can change it in `config/strategy.yaml`.
 
 ## Tushare Interfaces Used

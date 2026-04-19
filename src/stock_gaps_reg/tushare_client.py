@@ -77,10 +77,11 @@ class TushareClient:
         frame.to_csv(cache_path, index=False)
         return self._normalize_daily(frame)
 
-    def get_daily_with_ma(self, ts_code: str, start_date: date, end_date: date, ma_window: int) -> pd.DataFrame:
-        history_start = start_date - timedelta(days=ma_window * 3)
+    def get_daily_with_ma(self, ts_code: str, start_date: date, end_date: date, ma_window: int, vol_ma_window: int = 5) -> pd.DataFrame:
+        history_start = start_date - timedelta(days=max(ma_window, vol_ma_window) * 3)
         frame = self.get_daily(ts_code, history_start, end_date).copy()
         frame["ma"] = frame["close"].rolling(ma_window).mean()
+        frame["vol_ma"] = frame["vol"].rolling(vol_ma_window).mean()
         return frame[frame["trade_date"].between(pd.Timestamp(start_date), pd.Timestamp(end_date))].reset_index(drop=True)
 
     def get_minutes_for_day(self, ts_code: str, trade_date: date, freq: str = "1min") -> pd.DataFrame:

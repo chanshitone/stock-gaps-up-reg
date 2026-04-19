@@ -23,14 +23,13 @@ class EntryConfig:
     volume_fraction: float
     lower_shadow_ratio: float
     close_in_upper_half: bool
+    day1_min_change_pct: float
+    day1_min_close_strength: float
 
 
 @dataclass(frozen=True)
 class RiskConfig:
     initial_stop_loss_pct: float
-    gap_fill_stop_buffer_pct: float
-    raise_stop_at_1r_to_entry: bool
-    raise_stop_at_2r_to_entry_plus_1r: bool
 
 
 @dataclass(frozen=True)
@@ -40,6 +39,8 @@ class ExitConfig:
     timeout_hold_days: int
     timeout_target_r: float
     simulation_max_days_after_entry: int
+    vol_spike_ma_window: int
+    vol_spike_ratio: float
 
 
 @dataclass(frozen=True)

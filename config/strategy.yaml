@@ -9,21 +9,22 @@ entry:
   pullback_fraction: 0.5
   pullback_reference: body
   volume_fraction: 0.75
-  lower_shadow_ratio: 1.5
+  lower_shadow_ratio: 0.4
   close_in_upper_half: true
+  day1_min_change_pct: 0.03
+  day1_min_close_strength: 0.5
 
 risk:
-  initial_stop_loss_pct: 0.05
-  gap_fill_stop_buffer_pct: 0.01
-  raise_stop_at_1r_to_entry: true
-  raise_stop_at_2r_to_entry_plus_1r: true
+  initial_stop_loss_pct: 0.1
 
 exit:
-  ma_window: 10
+  ma_window: 13
   consecutive_close_below_ma_days: 2
   timeout_hold_days: 10
   timeout_target_r: 0.5
-  simulation_max_days_after_entry: 20
+  simulation_max_days_after_entry: 50
+  vol_spike_ma_window: 5
+  vol_spike_ratio: 1.5
 
 data:
   minute_freq: 1min

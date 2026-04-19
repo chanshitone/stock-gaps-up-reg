@@ -30,6 +30,8 @@ class EntryDecision:
     stabilized_after_1400: bool = False
     gap_unfilled: bool = False
     gap_size: float | None = None
+    day1_change_pct: float | None = None
+    day1_close_strength: float | None = None
     initial_stop_price: float | None = None
     initial_r: float | None = None
 
