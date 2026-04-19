@@ -23,6 +23,7 @@ class EntryConfig:
     day1_min_change_pct: float
     day1_min_close_strength: float
     max_gap_fill_ratio: float
+    vwap_min_buffer: float
 
 
 @dataclass(frozen=True)

@@ -72,6 +72,7 @@ def _vwap_check(
     minute_frame: pd.DataFrame,
     trade_date: date,
     buy_price: float,
+    vwap_min_buffer: float = 0.0,
 ) -> tuple[float, bool, bool]:
     """
     Returns (vwap_at_1430, price_above_vwap, vwap_rising_after_1400).
@@ -86,7 +87,7 @@ def _vwap_check(
     session["vwap"] = (session["close"] * session["vol"]).cumsum() / cum_vol.where(cum_vol > 0)
 
     vwap_at_end = float(session.iloc[-1]["vwap"])
-    price_above_vwap = buy_price >= vwap_at_end
+    price_above_vwap = buy_price >= vwap_at_end * (1 + vwap_min_buffer)
 
     after_1400 = session[session["trade_time"].dt.time >= datetime.strptime("14:00", "%H:%M").time()]
     if len(after_1400) >= 2:
@@ -178,7 +179,12 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     day1_close_strength = (_detect_close - _detect_low) / _detect_range if _detect_range > 0 else 0.0
     gap_size = float(detect_row["low"] - prev_row["high"])
     gap_fill_ratio = (_detect_close - buy_price) / gap_size if gap_size > 0 else float("nan")
-    vwap_at_1430, price_above_vwap, vwap_rising = _vwap_check(buy_minutes, buy_date, buy_price)
+    vwap_at_1430, price_above_vwap, vwap_rising = _vwap_check(buy_minutes, buy_date, buy_price, config.entry.vwap_min_buffer)
+
+    before_1400 = _minute_slice(buy_minutes, buy_date, start_time="09:30", end_time="13:59")
+    after_1400 = _minute_slice(buy_minutes, buy_date, start_time="14:00", end_time="14:30")
+    day2_low_before_1400 = float(before_1400["low"].min()) if not before_1400.empty else float("nan")
+    day2_low_after_1400 = float(after_1400["low"].min()) if not after_1400.empty else float("nan")
 
     volume_ok = day2_volume_1430 < detect_day_volume * config.entry.volume_fraction
     price_ok = pullback_ratio <= config.entry.pullback_fraction
@@ -186,7 +192,9 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     day1_close_strength_ok = day1_close_strength >= config.entry.day1_min_close_strength
     gap_fill_ok = not isnan(gap_fill_ratio) and gap_fill_ratio <= config.entry.max_gap_fill_ratio
     vwap_ok = price_above_vwap and vwap_rising
-    eligible = price_ok and volume_ok and gap_fill_ok and vwap_ok and (day1_change_ok or day1_close_strength_ok)
+    no_new_low_ok = (not isnan(day2_low_before_1400) and not isnan(day2_low_after_1400)
+                     and day2_low_after_1400 > day2_low_before_1400)
+    eligible = price_ok and volume_ok and gap_fill_ok and vwap_ok and no_new_low_ok and (day1_change_ok or day1_close_strength_ok)
 
     notes = {
         "buy_date": buy_date,
@@ -205,6 +213,8 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
         "vwap_at_1430": vwap_at_1430,
         "price_above_vwap": price_above_vwap,
         "vwap_rising_after_1400": vwap_rising,
+        "day2_low_before_1400": day2_low_before_1400,
+        "day2_low_after_1400": day2_low_after_1400,
         "day1_change_pct": day1_change_pct,
         "day1_close_strength": day1_close_strength,
     }
@@ -222,6 +232,8 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
             failed.append("gap_fill_ratio_rule")
         if not vwap_ok:
             failed.append("vwap_rule")
+        if not no_new_low_ok:
+            failed.append("no_new_low_after_1400_rule")
         return EntryDecision(eligible=False, reason=";".join(failed), **notes)
 
     initial_stop = buy_price * (1 - config.risk.initial_stop_loss_pct)

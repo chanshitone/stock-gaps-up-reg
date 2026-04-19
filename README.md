@@ -8,21 +8,32 @@ Input:
 
 - Candidate CSV with `ts_code` and `detect_date`
 
-Entry logic on the second trading day after the detect date:
+### Entry Conditions
 
-- 14:30 market-entry proxy using the `14:30` 1-minute close
-- Pullback depth must stay within the configured fraction of the detect-day move
-- day2 14:30 cumulative volume must be below the configured fraction of detect-day full-session volume
-- Must show either a long lower shadow from the `09:30-14:30` window or a `14:00-14:30` stabilization pattern based on intraday VWAP: at least 90% of 1-minute closes are above VWAP, and the `14:30` close is above VWAP
-- Gap must remain unfilled by `14:30`
+Buy at the **14:30** 1-minute bar close on the **next trading day** after `detect_date` (day2). All of the following must be satisfied:
 
-Exit logic:
+| # | Condition | Config Key | Default |
+|---|-----------|-----------|---------|
+| 1 | **Gap confirmed**: detect-day low > previous-day high | — | structural |
+| 2 | **Pullback depth**: `(detect_close - buy_price) / (detect_close - detect_open) ≤ pullback_fraction` | `entry.pullback_fraction` | 0.5 |
+| 3 | **Volume shrink**: day2 cumulative volume up to 14:30 < detect-day full volume × `volume_fraction` | `entry.volume_fraction` | 0.75 |
+| 4 | **Day1 strength** (OR): detect-day change% ≥ `day1_min_change_pct` **or** close strength ≥ `day1_min_close_strength` | `entry.day1_min_change_pct` / `entry.day1_min_close_strength` | 0.01 / 0.5 |
+| 5 | **Gap fill ratio**: `(detect_close - buy_price) / gap_size ≤ max_gap_fill_ratio` | `entry.max_gap_fill_ratio` | -0.8 |
+| 6 | **VWAP filter**: buy_price ≥ session VWAP × (1 + `vwap_min_buffer`) **and** VWAP rising from 14:00 to 14:30 | `entry.vwap_min_buffer` | 0.002 |
+| 7 | **No new low after 14:00**: day2 low in 14:00–14:30 > day2 low in 09:30–13:59 | — | structural |
 
-- Initial stop is the tighter of `buy_price - 5%` and `gap_fill_price - 1%`
-- At `1R`, stop moves to entry
-- At `2R`, stop moves to `entry + 1R`
-- Two consecutive closes below MA5 trigger exit at next open
-- If price does not reach `0.5R` within 10 holding days, exit at day-11 open
+### Exit Conditions
+
+Exits are checked in priority order each trading day:
+
+| # | Condition | Config Key | Default |
+|---|-----------|-----------|---------|
+| 1 | **Gap-down stop**: day open ≤ stop price → exit at open | — | — |
+| 2 | **Fixed stop**: intrabar price hits stop (5% below entry) → exit at stop | `risk.initial_stop_loss_pct` | 0.05 |
+| 3 | **MA exit**: 2 consecutive closes below MA13 → exit at next open | `exit.ma_window` / `exit.consecutive_close_below_ma_days` | 13 / 2 |
+| 4 | **Volume spike**: daily volume > 1.5× vol MA5 with no new closing high → exit at next open | `exit.vol_spike_ratio` / `exit.vol_spike_ma_window` | 1.5 / 5 |
+| 5 | **Timeout**: if price hasn't reached 0.5R within 10 holding days → exit at next open | `exit.timeout_hold_days` / `exit.timeout_target_r` | 10 / 0.5 |
+| 6 | **Forced end**: simulation cap reached → exit at last bar close | `exit.simulation_max_days_after_entry` | 50 |
 
 Outputs:
 
@@ -74,14 +85,14 @@ This script writes `details.csv` and `summary.csv` under `outputs/detect_window_
 
 ## Important Assumptions
 
-- `day 2` is interpreted as the second trading day after `detect_date`.
-- `window_trading_days=10` is interpreted as counting `detect_date` itself as day 1, then measuring through the close of the 10th trading day.
-- `14:30 market price` is approximated with the `14:30` 1-minute bar close from `stk_mins`.
-- Pullback depth defaults to `(detect_close - buy_price) / detect_day_body`. If detect-day body is not positive, the script falls back to detect-day high-low range.
-- `gap not filled` is interpreted as `day2 intraday low > previous trading day high`.
-- `long lower shadow` is approximated from the `09:30-14:30` intraday window and passes when `(lower_shadow / range) >= 0.4` and `close >= (high + low) / 2`.
-- `stabilized after 14:00` means that in the `14:00-14:30` window, at least 90% of 1-minute closes are above the session VWAP, where VWAP is computed cumulatively from `09:30` through each minute as `sum(close_i * vol_i) / sum(vol_i)`, and the `14:30` close must also be above the `14:30` VWAP.
-- Intrabar order defaults to `O -> H -> L -> C`. You can change it in `config/strategy.yaml`.
+- **Day 2** is the next trading day after `detect_date`.
+- **14:30 market price** is the `14:30` 1-minute bar close from local parquet data (`inputs/a_share_1_min/`).
+- **Pullback depth** defaults to `(detect_close - buy_price) / detect_day_body`. If detect-day body ≤ 0, falls back to high–low range.
+- **Gap fill ratio** = `(detect_close - buy_price) / gap_size`. Negative means buy price is well inside the gap (good); closer to 0 means gap is being eroded.
+- **VWAP** is session-cumulative from 09:30: `sum(close_i × vol_i) / sum(vol_i)`. "Rising" means VWAP at the last 14:30 bar > VWAP at the first 14:00 bar.
+- **No new low after 14:00**: the minimum low of 14:00–14:30 bars must be strictly higher than the minimum low of 09:30–13:59 bars.
+- **Intrabar order** defaults to `O → H → L → C`. Change via `market.intrabar_order` in `config/strategy.yaml`.
+- **A-share lot size**: capital simulation scripts round shares to the nearest 100-share lot.
 
 ## Tushare Interfaces Used
 

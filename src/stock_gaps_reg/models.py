@@ -31,6 +31,8 @@ class EntryDecision:
     vwap_at_1430: float | None = None
     price_above_vwap: bool = False
     vwap_rising_after_1400: bool = False
+    day2_low_before_1400: float | None = None
+    day2_low_after_1400: float | None = None
     day1_change_pct: float | None = None
     day1_close_strength: float | None = None
     initial_stop_price: float | None = None

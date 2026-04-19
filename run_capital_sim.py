@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
 
 import pandas as pd
@@ -26,7 +25,7 @@ def run(trades_path: Path, capital: float) -> None:
         print("No traded candidates found in the file.")
         return
 
-    traded["shares"] = (capital / traded["buy_price"]).apply(math.floor)
+    traded["shares"] = (capital / traded["buy_price"] / 100).apply(round).mul(100)
     traded["actual_cost"] = traded["shares"] * traded["buy_price"]
     traded["pnl_cny"] = traded["shares"] * (traded["exit_price"] - traded["buy_price"])
     traded["pnl_pct_actual"] = traded["pnl_cny"] / traded["actual_cost"] * 100

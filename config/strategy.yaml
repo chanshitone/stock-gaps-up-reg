@@ -11,6 +11,7 @@ entry:
   day1_min_change_pct: 0.01
   day1_min_close_strength: 0.5
   max_gap_fill_ratio: -0.8
+  vwap_min_buffer: 0.002
 
 risk:
   initial_stop_loss_pct: 0.05
