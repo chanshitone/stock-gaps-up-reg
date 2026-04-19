@@ -1,7 +1,6 @@
 market:
   exchange: SSE
   buy_time: "14:30"
-  stabilization_start_time: "14:00"
   intrabar_order: "ohlc"
 
 entry:
@@ -9,13 +8,12 @@ entry:
   pullback_fraction: 0.5
   pullback_reference: body
   volume_fraction: 0.75
-  lower_shadow_ratio: 0.4
-  close_in_upper_half: true
-  day1_min_change_pct: 0.03
+  day1_min_change_pct: 0.01
   day1_min_close_strength: 0.5
+  max_gap_fill_ratio: -0.8
 
 risk:
-  initial_stop_loss_pct: 0.1
+  initial_stop_loss_pct: 0.05
 
 exit:
   ma_window: 13

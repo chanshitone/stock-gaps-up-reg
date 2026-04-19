@@ -26,10 +26,11 @@ class EntryDecision:
     detect_day_volume: float | None = None
     day2_volume_1430: float | None = None
     pullback_ratio: float | None = None
-    has_long_lower_shadow: bool = False
-    stabilized_after_1400: bool = False
-    gap_unfilled: bool = False
     gap_size: float | None = None
+    gap_fill_ratio: float | None = None
+    vwap_at_1430: float | None = None
+    price_above_vwap: bool = False
+    vwap_rising_after_1400: bool = False
     day1_change_pct: float | None = None
     day1_close_strength: float | None = None
     initial_stop_price: float | None = None

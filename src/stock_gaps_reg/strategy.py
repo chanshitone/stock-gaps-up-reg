@@ -53,54 +53,6 @@ def _compute_pullback_ratio(detect_row: pd.Series, buy_price: float, reference_m
     return pullback_amount / reference
 
 
-def _has_long_lower_shadow(
-    minute_frame: pd.DataFrame,
-    trade_date: date,
-    min_ratio: float,
-    close_in_upper_half: bool,
-) -> bool:
-    window = _minute_slice(minute_frame, trade_date, start_time="09:30", end_time="14:30")
-    if window.empty:
-        return False
-    candle_open = float(window.iloc[0]["open"])
-    candle_close = float(window.iloc[-1]["close"])
-    candle_high = float(window["high"].max())
-    candle_low = float(window["low"].min())
-    lower_shadow = min(candle_open, candle_close) - candle_low
-    full_range = candle_high - candle_low
-    if full_range <= 0:
-        return False
-    if close_in_upper_half and candle_close < (candle_high + candle_low) / 2:
-        return False
-    return lower_shadow / full_range >= min_ratio
-
-
-def _stabilized_after_1400(minute_frame: pd.DataFrame, trade_date: date, start_time: str) -> bool:
-    session = _minute_slice(minute_frame, trade_date, start_time="09:30", end_time="14:30")
-    window = _minute_slice(minute_frame, trade_date, start_time=start_time, end_time="14:30")
-    if session.empty or window.empty:
-        return False
-    session = session.copy()
-    cumulative_volume = session["vol"].cumsum()
-    session["vwap"] = (session["close"] * session["vol"]).cumsum() / cumulative_volume.where(cumulative_volume > 0)
-
-    window = window.merge(session[["trade_time", "vwap"]], on="trade_time", how="left")
-    if window["vwap"].isna().any():
-        return False
-
-    above_vwap_fraction = float((window["close"] > window["vwap"]).mean())
-    last_close = float(window.iloc[-1]["close"])
-    last_vwap = float(window.iloc[-1]["vwap"])
-    return above_vwap_fraction >= 0.9 and last_close > last_vwap
-
-
-def _gap_unfilled(prev_high: float, minute_frame: pd.DataFrame, trade_date: date, end_time: str) -> bool:
-    window = _minute_slice(minute_frame, trade_date, end_time=end_time)
-    if window.empty:
-        return False
-    return float(window["low"].min()) > prev_high
-
-
 def _cumulative_volume_to(frame: pd.DataFrame, trade_date: date, end_time: str) -> float:
     window = _minute_slice(frame, trade_date, end_time=end_time)
     if window.empty:
@@ -114,6 +66,35 @@ def _buy_bar(frame: pd.DataFrame, trade_date: date, buy_time: str) -> pd.Series:
     if matched.empty:
         raise ValueError(f"Missing minute bar at {target_dt}.")
     return matched.iloc[0]
+
+
+def _vwap_check(
+    minute_frame: pd.DataFrame,
+    trade_date: date,
+    buy_price: float,
+) -> tuple[float, bool, bool]:
+    """
+    Returns (vwap_at_1430, price_above_vwap, vwap_rising_after_1400).
+    VWAP is session-cumulative from 09:30 to 14:30.
+    Slope is determined by comparing VWAP at first bar >= 14:00 vs last bar at 14:30.
+    """
+    session = _minute_slice(minute_frame, trade_date, start_time="09:30", end_time="14:30")
+    if session.empty:
+        return float("nan"), False, False
+    session = session.copy()
+    cum_vol = session["vol"].cumsum()
+    session["vwap"] = (session["close"] * session["vol"]).cumsum() / cum_vol.where(cum_vol > 0)
+
+    vwap_at_end = float(session.iloc[-1]["vwap"])
+    price_above_vwap = buy_price >= vwap_at_end
+
+    after_1400 = session[session["trade_time"].dt.time >= datetime.strptime("14:00", "%H:%M").time()]
+    if len(after_1400) >= 2:
+        vwap_rising = float(after_1400.iloc[-1]["vwap"]) > float(after_1400.iloc[0]["vwap"])
+    else:
+        vwap_rising = False
+
+    return vwap_at_end, price_above_vwap, vwap_rising
 
 
 def _trade_days_after(client: TushareClient, start_date: date, days_needed: int) -> list[date]:
@@ -187,18 +168,6 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     pullback_ratio = _compute_pullback_ratio(detect_row, buy_price, config.entry.pullback_reference)
     detect_day_volume = float(detect_minutes["vol"].sum())
     day2_volume_1430 = _cumulative_volume_to(buy_minutes, buy_date, config.market.buy_time)
-    has_long_lower_shadow = _has_long_lower_shadow(
-        buy_minutes,
-        buy_date,
-        config.entry.lower_shadow_ratio,
-        config.entry.close_in_upper_half,
-    )
-    stabilized_after_1400 = _stabilized_after_1400(
-        buy_minutes,
-        buy_date,
-        config.market.stabilization_start_time,
-    )
-    gap_unfilled = _gap_unfilled(float(prev_row["high"]), buy_minutes, buy_date, config.market.buy_time)
 
     _detect_open = float(detect_row["open"])
     _detect_close = float(detect_row["close"])
@@ -207,13 +176,17 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     _detect_range = _detect_high - _detect_low
     day1_change_pct = (_detect_close - _detect_open) / _detect_open if _detect_open > 0 else 0.0
     day1_close_strength = (_detect_close - _detect_low) / _detect_range if _detect_range > 0 else 0.0
+    gap_size = float(detect_row["low"] - prev_row["high"])
+    gap_fill_ratio = (_detect_close - buy_price) / gap_size if gap_size > 0 else float("nan")
+    vwap_at_1430, price_above_vwap, vwap_rising = _vwap_check(buy_minutes, buy_date, buy_price)
 
     volume_ok = day2_volume_1430 < detect_day_volume * config.entry.volume_fraction
     price_ok = pullback_ratio <= config.entry.pullback_fraction
-    behavior_ok = has_long_lower_shadow or stabilized_after_1400
     day1_change_ok = day1_change_pct >= config.entry.day1_min_change_pct
     day1_close_strength_ok = day1_close_strength >= config.entry.day1_min_close_strength
-    eligible = price_ok and volume_ok and behavior_ok and gap_unfilled and day1_change_ok and day1_close_strength_ok
+    gap_fill_ok = not isnan(gap_fill_ratio) and gap_fill_ratio <= config.entry.max_gap_fill_ratio
+    vwap_ok = price_above_vwap and vwap_rising
+    eligible = price_ok and volume_ok and gap_fill_ok and vwap_ok and (day1_change_ok or day1_close_strength_ok)
 
     notes = {
         "buy_date": buy_date,
@@ -227,10 +200,11 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
         "detect_day_volume": detect_day_volume,
         "day2_volume_1430": day2_volume_1430,
         "pullback_ratio": pullback_ratio,
-        "has_long_lower_shadow": has_long_lower_shadow,
-        "stabilized_after_1400": stabilized_after_1400,
-        "gap_unfilled": gap_unfilled,
-        "gap_size": float(detect_row["low"] - prev_row["high"]),
+        "gap_size": gap_size,
+        "gap_fill_ratio": gap_fill_ratio,
+        "vwap_at_1430": vwap_at_1430,
+        "price_above_vwap": price_above_vwap,
+        "vwap_rising_after_1400": vwap_rising,
         "day1_change_pct": day1_change_pct,
         "day1_close_strength": day1_close_strength,
     }
@@ -241,14 +215,13 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
             failed.append("pullback_rule")
         if not volume_ok:
             failed.append("volume_rule")
-        if not behavior_ok:
-            failed.append("reversal_rule")
-        if not gap_unfilled:
-            failed.append("gap_fill_rule")
-        if not day1_change_ok:
+        if not day1_change_ok and not day1_close_strength_ok:
             failed.append("day1_change_rule")
-        if not day1_close_strength_ok:
             failed.append("day1_close_strength_rule")
+        if not gap_fill_ok:
+            failed.append("gap_fill_ratio_rule")
+        if not vwap_ok:
+            failed.append("vwap_rule")
         return EntryDecision(eligible=False, reason=";".join(failed), **notes)
 
     initial_stop = buy_price * (1 - config.risk.initial_stop_loss_pct)

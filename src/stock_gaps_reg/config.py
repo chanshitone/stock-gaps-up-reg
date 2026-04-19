@@ -11,7 +11,6 @@ import yaml
 class MarketConfig:
     exchange: str
     buy_time: str
-    stabilization_start_time: str
     intrabar_order: str
 
 
@@ -21,10 +20,9 @@ class EntryConfig:
     pullback_fraction: float
     pullback_reference: str
     volume_fraction: float
-    lower_shadow_ratio: float
-    close_in_upper_half: bool
     day1_min_change_pct: float
     day1_min_close_strength: float
+    max_gap_fill_ratio: float
 
 
 @dataclass(frozen=True)
