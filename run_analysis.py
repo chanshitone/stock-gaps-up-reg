@@ -99,14 +99,11 @@ def compute_free_features(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: _safe_div(r.get("entry_day2_volume_1430"), r.get("entry_detect_day_volume")),
         axis=1,
     )
-    # Gap-fill ratio: 0 = bought at detect close, 1 = gap fully filled at buy price
-    df["gap_fill_ratio"] = df.apply(
-        lambda r: _safe_div(
-            r.get("entry_detect_day_close", float("nan")) - r.get("buy_price", float("nan")),
-            r.get("entry_gap_size"),
-        ),
-        axis=1,
-    )
+    # Positive = buy price extended above detect close by this fraction of the original gap.
+    if "entry_price_up_ratio" in df.columns:
+        df["price_up_ratio"] = pd.to_numeric(df.get("entry_price_up_ratio"), errors="coerce")
+    else:
+        df["price_up_ratio"] = -pd.to_numeric(df.get("entry_gap_fill_ratio"), errors="coerce")
 
     # ── Binary behavioral features already captured in entry_notes ──────────
     for col in ("entry_has_long_lower_shadow", "entry_stabilized_after_1400", "entry_gap_unfilled"):
@@ -234,7 +231,7 @@ CONTINUOUS_FEATURES = [
     ("day1_close_strength",     "Day1 close strength (0–1)",      ">= thresh"),
     ("day1_range_pct",          "Day1 range pct",                 "any"),
     ("pullback_ratio",          "Day2 pullback ratio",            "<= thresh"),
-    ("gap_fill_ratio",          "Gap fill ratio (0=none,1=full)", "<= thresh"),
+    ("price_up_ratio",          "Price-up ratio vs detect close", ">= thresh"),
     ("vol_ratio_14_30",         "Vol ratio 14:30 / day1 vol",     "<= thresh"),
     ("hold_days",               "Hold days",                      "any"),
     ("mfe_r",                   "Max favorable excursion (R)",    ">= thresh"),

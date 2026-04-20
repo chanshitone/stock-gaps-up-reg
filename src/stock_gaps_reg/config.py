@@ -22,7 +22,7 @@ class EntryConfig:
     volume_fraction: float
     day1_min_change_pct: float
     day1_min_close_strength: float
-    max_gap_fill_ratio: float
+    min_price_up_ratio: float
     vwap_min_buffer: float
 
 
@@ -70,10 +70,14 @@ def load_config(path: Path) -> StrategyConfig:
     payload = _read_yaml(path)
     base_dir = path.parent.parent
     market = payload["market"]
-    entry = payload["entry"]
+    entry = dict(payload["entry"])
     risk = payload["risk"]
     exit_config = payload["exit"]
     data = payload["data"]
+
+    if "min_price_up_ratio" not in entry and "max_gap_fill_ratio" in entry:
+        entry["min_price_up_ratio"] = -float(entry["max_gap_fill_ratio"])
+    entry.pop("max_gap_fill_ratio", None)
 
     return StrategyConfig(
         market=MarketConfig(**market),

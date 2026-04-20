@@ -178,7 +178,7 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     day1_change_pct = (_detect_close - _detect_open) / _detect_open if _detect_open > 0 else 0.0
     day1_close_strength = (_detect_close - _detect_low) / _detect_range if _detect_range > 0 else 0.0
     gap_size = float(detect_row["low"] - prev_row["high"])
-    gap_fill_ratio = (_detect_close - buy_price) / gap_size if gap_size > 0 else float("nan")
+    price_up_ratio = (buy_price - _detect_close) / gap_size if gap_size > 0 else float("nan")
     vwap_at_1430, price_above_vwap, vwap_rising = _vwap_check(buy_minutes, buy_date, buy_price, config.entry.vwap_min_buffer)
 
     before_1400 = _minute_slice(buy_minutes, buy_date, start_time="09:30", end_time="13:59")
@@ -187,14 +187,13 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     day2_low_after_1400 = float(after_1400["low"].min()) if not after_1400.empty else float("nan")
 
     volume_ok = day2_volume_1430 < detect_day_volume * config.entry.volume_fraction
-    price_ok = pullback_ratio <= config.entry.pullback_fraction
     day1_change_ok = day1_change_pct >= config.entry.day1_min_change_pct
     day1_close_strength_ok = day1_close_strength >= config.entry.day1_min_close_strength
-    gap_fill_ok = not isnan(gap_fill_ratio) and gap_fill_ratio <= config.entry.max_gap_fill_ratio
+    price_up_ok = not isnan(price_up_ratio) and price_up_ratio >= config.entry.min_price_up_ratio
     vwap_ok = price_above_vwap and vwap_rising
     no_new_low_ok = (not isnan(day2_low_before_1400) and not isnan(day2_low_after_1400)
                      and day2_low_after_1400 > day2_low_before_1400)
-    eligible = price_ok and volume_ok and gap_fill_ok and vwap_ok and no_new_low_ok and (day1_change_ok or day1_close_strength_ok)
+    eligible = volume_ok and price_up_ok and vwap_ok and no_new_low_ok and (day1_change_ok or day1_close_strength_ok)
 
     notes = {
         "buy_date": buy_date,
@@ -209,7 +208,7 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
         "day2_volume_1430": day2_volume_1430,
         "pullback_ratio": pullback_ratio,
         "gap_size": gap_size,
-        "gap_fill_ratio": gap_fill_ratio,
+        "price_up_ratio": price_up_ratio,
         "vwap_at_1430": vwap_at_1430,
         "price_above_vwap": price_above_vwap,
         "vwap_rising_after_1400": vwap_rising,
@@ -221,15 +220,13 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
 
     if not eligible:
         failed = []
-        if not price_ok:
-            failed.append("pullback_rule")
         if not volume_ok:
             failed.append("volume_rule")
         if not day1_change_ok and not day1_close_strength_ok:
             failed.append("day1_change_rule")
             failed.append("day1_close_strength_rule")
-        if not gap_fill_ok:
-            failed.append("gap_fill_ratio_rule")
+        if not price_up_ok:
+            failed.append("price_up_rule")
         if not vwap_ok:
             failed.append("vwap_rule")
         if not no_new_low_ok:

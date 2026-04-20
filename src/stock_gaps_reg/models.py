@@ -27,7 +27,7 @@ class EntryDecision:
     day2_volume_1430: float | None = None
     pullback_ratio: float | None = None
     gap_size: float | None = None
-    gap_fill_ratio: float | None = None
+    price_up_ratio: float | None = None
     vwap_at_1430: float | None = None
     price_above_vwap: bool = False
     vwap_rising_after_1400: bool = False

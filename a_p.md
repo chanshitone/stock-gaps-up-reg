@@ -34,7 +34,7 @@ day1_volume_ratio
 day1_range_pct
 2. Day2 回踩结构
 pullback_pct
-gap_fill_ratio
+price_up_ratio
 entry_time
 entry_vs_day2_low
 entry_vs_day2_high

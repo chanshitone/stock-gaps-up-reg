@@ -31,8 +31,11 @@ def derive_features(df: pd.DataFrame) -> pd.DataFrame:
     # VWAP slope proxy: 1 = rising 14:00→14:30, 0 = flat/falling
     t["vwap_slope_pm"] = _bool_col(t["entry_vwap_rising_after_1400"])
 
-    # gap fill ratio (already stored; negative = price still well inside gap)
-    t["gap_fill_ratio"] = t["entry_gap_fill_ratio"].astype(float)
+    # positive = buy price extended above detect close by this fraction of the original gap
+    if "entry_price_up_ratio" in t.columns:
+        t["price_up_ratio"] = t["entry_price_up_ratio"].astype(float)
+    else:
+        t["price_up_ratio"] = -t["entry_gap_fill_ratio"].astype(float)
 
     # pullback fraction from detect close
     t["pullback_pct"] = t["entry_pullback_ratio"].astype(float)
@@ -109,7 +112,7 @@ def tag_pattern(row: pd.Series) -> str:
     pv = row.get("price_vs_vwap")
     vs = row.get("vwap_slope_pm")
     nln = row.get("no_new_low_after_1400")
-    gfr = row.get("gap_fill_ratio")
+    price_up_ratio = row.get("price_up_ratio")
     vr = row.get("vol_ratio_14_30")
 
     if pd.notna(pv) and pv < 0:
@@ -118,8 +121,8 @@ def tag_pattern(row: pd.Series) -> str:
         tags.append("vwap_flat_down")
     if pd.notna(nln) and nln == 0:
         tags.append("new_low_pm")
-    if pd.notna(gfr) and gfr > -0.8:
-        tags.append("weak_gap")
+    if pd.notna(price_up_ratio) and price_up_ratio < 0.8:
+        tags.append("weak_price_up")
     if pd.notna(vr) and vr > 0.7:
         tags.append("high_vol_pullback")
     return "|".join(tags) if tags else "clean"
@@ -132,7 +135,7 @@ def tag_pattern(row: pd.Series) -> str:
 FEATURE_COLS = [
     "price_vs_vwap",
     "vwap_slope_pm",
-    "gap_fill_ratio",
+    "price_up_ratio",
     "pullback_pct",
     "vol_ratio_14_30",
     "no_new_low_after_1400",
@@ -156,8 +159,8 @@ def build_rules(t: pd.DataFrame) -> list[tuple[str, pd.Series]]:
          _safe(t["price_vs_vwap"], -999) >= 0.002),
         ("vwap_slope_pm > 0",
          t["vwap_slope_pm"] > 0),
-        ("gap_fill_ratio <= -0.9",
-         _safe(t["gap_fill_ratio"], 0) <= -0.9),
+        ("price_up_ratio >= 0.9",
+         _safe(t["price_up_ratio"], 0) >= 0.9),
         ("vol_ratio_14_30 <= 0.65",
          _safe(t["vol_ratio_14_30"], 1) <= 0.65),
     ]
@@ -269,7 +272,7 @@ def main() -> None:
     print(fs["pattern"].value_counts().to_string())
 
     print("\n  Tag component breakdown:")
-    for tag in ["below_vwap", "vwap_flat_down", "new_low_pm", "weak_gap", "high_vol_pullback"]:
+    for tag in ["below_vwap", "vwap_flat_down", "new_low_pm", "weak_price_up", "high_vol_pullback"]:
         cnt = fs["pattern"].str.contains(tag, regex=False).sum()
         print(f"    {tag:30s}: {cnt}/{len(fs)} ({cnt/len(fs)*100:.0f}%)")
 

@@ -25,7 +25,7 @@ fs = df[df["exit_reason"] == "fixed_stop"].copy()
 ```text
 price_vs_vwap          （入场价 / VWAP - 1）
 vwap_slope_pm          （14:00→14:30 的 VWAP 斜率）
-gap_fill_ratio
+price_up_ratio
 pullback_pct
 vol_ratio_14_30
 no_new_low_after_1400  （0/1）
@@ -47,7 +47,7 @@ def tag_pattern(r):
     if r["price_vs_vwap"] < 0: tags.append("below_vwap")
     if r["vwap_slope_pm"] <= 0: tags.append("vwap_flat_down")
     if r["no_new_low_after_1400"] == 0: tags.append("new_low_pm")
-    if r["gap_fill_ratio"] > -0.8: tags.append("weak_gap")
+    if r["price_up_ratio"] < 0.8: tags.append("weak_price_up")
     if r["vol_ratio_14_30"] > 0.7: tags.append("high_vol_pullback")
     if r["entry_pos_in_day2"] < 0.5: tags.append("low_position")
     return "|".join(tags) if tags else "clean"
@@ -112,7 +112,7 @@ no_new_low_after_1400 == 0
 特征：
 
 ```text
-gap_fill_ratio > -0.8（甚至接近 -0.5）
+price_up_ratio < 0.8（甚至接近 0.5）
 ```
 
 👉 解释：Day2 回踩已经吃掉太多 gap
@@ -120,7 +120,7 @@ gap_fill_ratio > -0.8（甚至接近 -0.5）
 **规则（你已有，但可微调）：**
 
 ```text
-gap_fill_ratio <= -0.9（或 -1.0 试两档）
+price_up_ratio >= 0.9（或 1.0 试两档）
 ```
 
 ---
@@ -182,7 +182,7 @@ def impact(rule_mask):
 * `price_vs_vwap >= 0.002`
 * `vwap_slope_pm > 0`
 * `entry_pos_in_day2 >= 0.6`
-* `gap_fill_ratio <= -0.9`
+* `price_up_ratio >= 0.9`
 
 👉 选出 **“砍掉 fixed_stop 多，但总R不下降（或上升）”** 的 1–2 条。
 

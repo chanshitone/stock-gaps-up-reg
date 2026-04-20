@@ -15,12 +15,11 @@ Buy at the **14:30** 1-minute bar close on the **next trading day** after `detec
 | # | Condition | Config Key | Default |
 |---|-----------|-----------|---------|
 | 1 | **Gap confirmed**: detect-day low > previous-day high | — | structural |
-| 2 | **Pullback depth**: `(detect_close - buy_price) / (detect_close - detect_open) ≤ pullback_fraction` | `entry.pullback_fraction` | 0.5 |
-| 3 | **Volume shrink**: day2 cumulative volume up to 14:30 < detect-day full volume × `volume_fraction` | `entry.volume_fraction` | 0.75 |
-| 4 | **Day1 strength** (OR): detect-day change% ≥ `day1_min_change_pct` **or** close strength ≥ `day1_min_close_strength` | `entry.day1_min_change_pct` / `entry.day1_min_close_strength` | 0.01 / 0.5 |
-| 5 | **Gap fill ratio**: `(detect_close - buy_price) / gap_size ≤ max_gap_fill_ratio` | `entry.max_gap_fill_ratio` | -0.8 |
-| 6 | **VWAP filter**: buy_price ≥ session VWAP × (1 + `vwap_min_buffer`) **and** VWAP rising from 14:00 to 14:30 | `entry.vwap_min_buffer` | 0.002 |
-| 7 | **No new low after 14:00**: day2 low in 14:00–14:30 > day2 low in 09:30–13:59 | — | structural |
+| 2 | **Volume shrink**: day2 cumulative volume up to 14:30 < detect-day full volume × `volume_fraction` | `entry.volume_fraction` | 0.75 |
+| 3 | **Day1 strength** (OR): detect-day change% ≥ `day1_min_change_pct` **or** close strength ≥ `day1_min_close_strength` | `entry.day1_min_change_pct` / `entry.day1_min_close_strength` | 0.01 / 0.5 |
+| 4 | **Price-up strength**: `(buy_price - detect_close) / (detect_low - prev_high) ≥ min_price_up_ratio` | `entry.min_price_up_ratio` | 0.8 |
+| 5 | **VWAP filter**: buy_price ≥ session VWAP × (1 + `vwap_min_buffer`) **and** VWAP rising from 14:00 to 14:30 | `entry.vwap_min_buffer` | 0.002 |
+| 6 | **No new low after 14:00**: day2 low in 14:00–14:30 > day2 low in 09:30–13:59 | — | structural |
 
 ### Exit Conditions
 
@@ -88,7 +87,7 @@ This script writes `details.csv` and `summary.csv` under `outputs/detect_window_
 - **Day 2** is the next trading day after `detect_date`.
 - **14:30 market price** is the `14:30` 1-minute bar close from local parquet data (`inputs/a_share_1_min/`).
 - **Pullback depth** defaults to `(detect_close - buy_price) / detect_day_body`. If detect-day body ≤ 0, falls back to high–low range.
-- **Gap fill ratio** = `(detect_close - buy_price) / gap_size`. Negative means buy price is well inside the gap (good); closer to 0 means gap is being eroded.
+- **Gap retention vs. detect close** = `(detect_close - buy_price) / (detect_day_low - previous_day_high)`. More negative means the day2 buy price is further above the detect-day close; closer to 0 means more of that strength has faded.
 - **VWAP** is session-cumulative from 09:30: `sum(close_i × vol_i) / sum(vol_i)`. "Rising" means VWAP at the last 14:30 bar > VWAP at the first 14:00 bar.
 - **No new low after 14:00**: the minimum low of 14:00–14:30 bars must be strictly higher than the minimum low of 09:30–13:59 bars.
 - **Intrabar order** defaults to `O → H → L → C`. Change via `market.intrabar_order` in `config/strategy.yaml`.
