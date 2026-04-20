@@ -17,7 +17,6 @@ class MarketConfig:
 @dataclass(frozen=True)
 class EntryConfig:
     buy_on_nth_trading_day_after_detect: int
-    pullback_fraction: float
     pullback_reference: str
     volume_fraction: float
     day1_min_change_pct: float
@@ -78,6 +77,7 @@ def load_config(path: Path) -> StrategyConfig:
     if "min_price_up_ratio" not in entry and "max_gap_fill_ratio" in entry:
         entry["min_price_up_ratio"] = -float(entry["max_gap_fill_ratio"])
     entry.pop("max_gap_fill_ratio", None)
+    entry.pop("pullback_fraction", None)
 
     return StrategyConfig(
         market=MarketConfig(**market),

@@ -5,7 +5,6 @@ market:
 
 entry:
   buy_on_nth_trading_day_after_detect: 1
-  pullback_fraction: 0.5
   pullback_reference: body
   volume_fraction: 0.75
   day1_min_change_pct: 0.01
