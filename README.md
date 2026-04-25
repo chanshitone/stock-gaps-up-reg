@@ -163,6 +163,24 @@ python run_peak_capital.py --trades outputs/<run>/trades.csv
 python run_peak_capital.py --trades outputs/<run>/trades.csv --per-trade 20000
 ```
 
+`run_peak_capital_v2.py`
+
+- Purpose: calculate minimum principal under the same fixed per-trade allocation, plus one add-on buy per trade after 6 holding days if daily high exceeds entry + 1R
+- Input: `trades.csv` produced by `run_backtest.py`
+- Sizing: `--per-trade` controls the initial buy-leg capital; `--add-on-per-trade` controls the add-on buy-leg capital and defaults to the same amount as `--per-trade`
+- Add-on rule: after 5 holding days, if the day's high is greater than `buy_price + 1R`, buy one add-on position at the next trading day open, rounded to A-share 100-share lots; that add-on leg exits at the same recorded exit as the original trade
+- Extra outputs: add-on order CSV and daily win/loss equity CSV, written beside `trades.csv` by default
+
+```bash
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --per-trade 20000
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --per-trade 15000 --add-on-per-trade 20000
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --initial-principal 132470
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --add-on-csv outputs/<run>/add_on_orders.csv
+python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --daily-win-loss-csv outputs/<run>/daily_win_loss.csv
+```
+
 ## Implementation Notes
 
 - **Entry timing**: `buy_date` is the `entry.buy_on_nth_trading_day_after_detect`-th trading day after `detect_date` (default `1`). The previous trading day is also loaded so the gap can be confirmed with `detect_day_low > previous_day_high`.

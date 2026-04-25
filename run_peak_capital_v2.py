@@ -9,9 +9,10 @@ This v2 variant keeps the original initial allocation rule and adds one more
 position rule:
     - initial amount is still 15,000 CNY per stock
     - A-share quantity is rounded to 100-share lots
-        - if a trade has been held for more than 5 trading days and its daily high
-      is greater than entry + 1R, buy another 15,000 CNY at the next trading
-      day's opening price
+        - after 5 holding days, if the day's high is greater than buy_price + 1R,
+            buy one add-on position at the next trading day's opening price
+        - the add-on amount defaults to the same value as --per-trade, but can be
+            overridden with --add-on-per-trade
 
 The added position exits at the same exit_time and exit_price as the original
 trade recorded in the trades CSV.
@@ -19,6 +20,7 @@ trade recorded in the trades CSV.
 Usage:
     python run_peak_capital_v2.py --trades outputs/<run>/trades.csv
     python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --per-trade 20000
+    python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --per-trade 15000 --add-on-per-trade 20000
     python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --initial-principal 132470
     python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
     python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --add-on-csv outputs/<run>/add_on_orders.csv
@@ -136,14 +138,60 @@ def _build_daily_equity(
     previous_equity = daily["equity"].shift(1).fillna(initial_principal)
     daily["daily_pnl"] = daily["equity"].diff().fillna(daily["equity"] - initial_principal)
     daily["daily_return_pct"] = daily["daily_pnl"] / previous_equity * 100
+    daily["equity_trough"] = daily["equity"].cummin()
+    daily["raise"] = daily["equity"] - daily["equity_trough"]
+    daily["raise_pct"] = daily["raise"] / daily["equity_trough"] * 100
+    daily["equity_peak"] = daily["equity"].cummax()
+    daily["pullback"] = daily["equity"] - daily["equity_peak"]
+    daily["pullback_pct"] = daily["pullback"] / daily["equity_peak"] * 100
     return daily
+
+
+def _max_pullback_stats(daily: pd.DataFrame) -> dict[str, object]:
+    if daily.empty:
+        return {
+            "amount": 0.0,
+            "pct": 0.0,
+            "peak_date": None,
+            "trough_date": None,
+        }
+
+    trough_idx = daily["pullback"].idxmin()
+    peak_slice = daily.loc[:trough_idx, "equity"]
+    peak_idx = peak_slice.idxmax()
+    return {
+        "amount": float(-daily.loc[trough_idx, "pullback"]),
+        "pct": float(-daily.loc[trough_idx, "pullback_pct"]),
+        "peak_date": peak_idx,
+        "trough_date": trough_idx,
+    }
+
+
+def _max_raise_stats(daily: pd.DataFrame) -> dict[str, object]:
+    if daily.empty:
+        return {
+            "amount": 0.0,
+            "pct": 0.0,
+            "trough_date": None,
+            "peak_date": None,
+        }
+
+    peak_idx = daily["raise"].idxmax()
+    trough_slice = daily.loc[:peak_idx, "equity"]
+    trough_idx = trough_slice.idxmin()
+    return {
+        "amount": float(daily.loc[peak_idx, "raise"]),
+        "pct": float(daily.loc[peak_idx, "raise_pct"]),
+        "trough_date": trough_idx,
+        "peak_date": peak_idx,
+    }
 
 
 def _build_add_on_execution(
     daily: pd.DataFrame,
     trigger_index: int,
     exit_dt: pd.Timestamp,
-    per_trade: float,
+    add_on_per_trade: float,
     exit_price: float,
 ) -> dict[str, object] | None:
     if trigger_index + 1 >= len(daily):
@@ -156,7 +204,7 @@ def _build_add_on_execution(
         return None
 
     add_price = float(add_row["open"])
-    add_shares = _lot_shares(per_trade, add_price)
+    add_shares = _lot_shares(add_on_per_trade, add_price)
     if add_shares <= 0:
         return None
 
@@ -238,6 +286,12 @@ def _export_daily_win_loss(daily: pd.DataFrame, export_path: Path) -> None:
                 "cash_balance",
                 "market_value",
                 "daily_return_pct",
+                "equity_trough",
+                "raise",
+                "raise_pct",
+                "equity_peak",
+                "pullback",
+                "pullback_pct",
                 "positions",
             ]
         )
@@ -253,6 +307,12 @@ def _export_daily_win_loss(daily: pd.DataFrame, export_path: Path) -> None:
                 "cash_balance",
                 "market_value",
                 "daily_return_pct",
+                "equity_trough",
+                "raise",
+                "raise_pct",
+                "equity_peak",
+                "pullback",
+                "pullback_pct",
                 "positions",
             ]
         ]
@@ -262,7 +322,7 @@ def _export_daily_win_loss(daily: pd.DataFrame, export_path: Path) -> None:
 def _find_add_on_order(
     row: pd.Series,
     client: TushareClient,
-    per_trade: float,
+    add_on_per_trade: float,
 ) -> dict[str, object] | None:
     buy_date = row["buy_date"]
     exit_date = row["exit_date"]
@@ -292,7 +352,7 @@ def _find_add_on_order(
         if hold_days < ADD_ON_MIN_HOLD_DAYS or float(daily_row["high"]) <= trigger_price:
             continue
 
-        return _build_add_on_execution(daily, index, exit_dt, per_trade, exit_price)
+        return _build_add_on_execution(daily, index, exit_dt, add_on_per_trade, exit_price)
 
     return None
 
@@ -300,6 +360,7 @@ def _find_add_on_order(
 def run(
     trades_path: Path,
     per_trade: float,
+    add_on_per_trade: float | None,
     config_path: Path,
     add_on_csv_path: Path | None,
     daily_win_loss_csv_path: Path | None,
@@ -315,6 +376,7 @@ def run(
         cache_dir=Path(config.data.cache_dir),
         exchange=config.market.exchange,
     )
+    resolved_add_on_per_trade = per_trade if add_on_per_trade is None else float(add_on_per_trade)
 
     traded["shares"] = traded["buy_price"].apply(lambda p: _lot_shares(per_trade, p))
     traded["actual_cost"] = traded["shares"] * traded["buy_price"]
@@ -332,7 +394,7 @@ def run(
         events.append((exit_dt, 0, row["exit_proceeds"], -1, row["ts_code"], "initial_exit"))
         _append_position_leg(position_legs, row["ts_code"], buy_dt, exit_dt, int(row["shares"]))
 
-        add_on = _find_add_on_order(row, client, per_trade)
+        add_on = _find_add_on_order(row, client, resolved_add_on_per_trade)
         if add_on is None:
             continue
 
@@ -375,6 +437,8 @@ def run(
     ev["cash_balance"] = starting_principal + ev["cum_cash"]
     ev["date"] = ev["event_time"].dt.date
     daily = _build_daily_equity(ev, position_legs, client, starting_principal)
+    max_raise = _max_raise_stats(daily)
+    max_pullback = _max_pullback_stats(daily)
 
     base_total_pnl = (traded["exit_proceeds"] - traded["actual_cost"]).sum()
     add_on_total_pnl = sum(float(item["exit_proceeds"]) - float(item["add_cost"]) for item in add_on_orders)
@@ -408,7 +472,8 @@ def run(
     print(f"  Config        : {config_path}")
     print(f"  Add-on CSV    : {export_path}")
     print(f"  Daily W/L CSV : {daily_win_loss_export_path}")
-    print(f"  Per-trade     : ¥{per_trade:,.0f}")
+    print(f"  Initial trade : ¥{per_trade:,.0f}")
+    print(f"  Add-on trade  : ¥{resolved_add_on_per_trade:,.0f}")
     print(f"  Initial cash  : ¥{starting_principal:,.0f}")
     print(f"  Total trades  : {len(traded)}")
     print(f"  Add-on buys   : {len(add_on_orders)}")
@@ -427,6 +492,26 @@ def run(
     print(f"  Positions at bottom  : {int(peak_positions)}")
     print(f"  Final cash balance   : ¥{starting_principal + ev['cum_cash'].iloc[-1]:,.0f}")
     print(f"  Final equity        : ¥{daily['equity'].iloc[-1]:,.2f}")
+    print(
+        f"  Max raise           : ¥{max_raise['amount']:,.2f} "
+        f"({max_raise['pct']:.2f}%)"
+    )
+    if max_raise["trough_date"] is not None and max_raise["peak_date"] is not None:
+        print(
+            "  Raise window        : "
+            f"{pd.Timestamp(max_raise['trough_date']).strftime('%Y-%m-%d')} -> "
+            f"{pd.Timestamp(max_raise['peak_date']).strftime('%Y-%m-%d')}"
+        )
+    print(
+        f"  Max pullback        : ¥{max_pullback['amount']:,.2f} "
+        f"({max_pullback['pct']:.2f}%)"
+    )
+    if max_pullback["peak_date"] is not None and max_pullback["trough_date"] is not None:
+        print(
+            "  Pullback window     : "
+            f"{pd.Timestamp(max_pullback['peak_date']).strftime('%Y-%m-%d')} -> "
+            f"{pd.Timestamp(max_pullback['trough_date']).strftime('%Y-%m-%d')}"
+        )
     print(f"  Base trade P&L       : ¥{base_total_pnl:,.2f}")
     print(f"  Add-on P&L           : ¥{add_on_total_pnl:,.2f}")
     print(f"  Total P&L            : ¥{total_pnl:,.2f}")
@@ -441,7 +526,13 @@ def main() -> None:
         "--per-trade",
         type=float,
         default=DEFAULT_PER_TRADE,
-        help="Capital per buy leg in CNY (default: 15000)",
+        help="Capital for the initial buy leg in CNY (default: 15000)",
+    )
+    parser.add_argument(
+        "--add-on-per-trade",
+        type=float,
+        default=None,
+        help="Capital for each add-on buy leg in CNY (default: same as --per-trade)",
     )
     parser.add_argument(
         "--config",
@@ -471,6 +562,7 @@ def main() -> None:
     run(
         args.trades.resolve(),
         args.per_trade,
+        args.add_on_per_trade,
         args.config.resolve(),
         args.add_on_csv.resolve() if args.add_on_csv else None,
         args.daily_win_loss_csv.resolve() if args.daily_win_loss_csv else None,
