@@ -255,7 +255,7 @@ def _apply_intrabar_path(
     current_stop: float,
     intrabar_order: str,
 ) -> tuple[float, float | None]:
-    """Check whether any intrabar checkpoint hits the stop. Stop raises are handled separately via daily close."""
+    """Apply intrabar stop checks using the stop level that was already in force before the bar opened."""
     if intrabar_order == "olhc":
         checkpoints = [open_price, low_price, high_price, close_price]
     else:
@@ -286,6 +286,12 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
     buy_price = float(entry.buy_price)
     initial_stop = float(entry.initial_stop_price)
     initial_r = float(entry.initial_r)
+    profit_lock_trigger_price = buy_price + config.exit.profit_lock_target_r * initial_r
+    profit_lock_stop_price = buy_price + (config.exit.profit_lock_target_r - 1) * initial_r
+    profit_lock_exit_reason = f"profit_lock_{config.exit.profit_lock_target_r:g}r_stop"
+    profit_lock_secondary_trigger_price = buy_price + config.exit.profit_lock_secondary_target_r * initial_r
+    profit_lock_secondary_stop_price = buy_price + config.exit.profit_lock_secondary_stop_r * initial_r
+    profit_lock_secondary_exit_reason = f"profit_lock_{config.exit.profit_lock_secondary_target_r:g}r_stop"
     future_days = _trade_days_after(client, buy_date, config.exit.simulation_max_days_after_entry + 2)
     end_date = future_days[-1]
     daily = client.get_daily_with_ma(candidate.ts_code, buy_date, end_date, config.exit.ma_window, config.exit.vol_spike_ma_window)
@@ -297,6 +303,8 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
     min_low = buy_price
     max_close_since_entry = buy_price
     reached_half_r = False
+    profit_lock_activated = False
+    profit_lock_secondary_activated = False
     consecutive_below_ma = 0
     scheduled_open_exit: tuple[date, str] | None = None
 
@@ -339,6 +347,8 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
                 peak_stop_price=peak_stop_price,
             )
 
+        day_reached_profit_lock = False
+        day_reached_profit_lock_secondary = False
         for row in minutes.itertuples(index=False):
             open_price = float(row.open)
             high_price = float(row.high)
@@ -349,6 +359,10 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
             min_low = min(min_low, low_price)
             if high_price >= half_r_target:
                 reached_half_r = True
+            if high_price >= profit_lock_trigger_price:
+                day_reached_profit_lock = True
+            if high_price >= profit_lock_secondary_trigger_price:
+                day_reached_profit_lock_secondary = True
 
             stop_price, triggered_exit = _apply_intrabar_path(
                 open_price,
@@ -360,13 +374,19 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
             )
             peak_stop_price = max(peak_stop_price, stop_price)
             if triggered_exit is not None:
+                if profit_lock_secondary_activated and stop_price >= profit_lock_secondary_stop_price:
+                    exit_reason = profit_lock_secondary_exit_reason
+                elif profit_lock_activated and stop_price >= profit_lock_stop_price:
+                    exit_reason = profit_lock_exit_reason
+                else:
+                    exit_reason = "fixed_stop"
                 return _finalize_trade(
                     candidate,
                     entry,
                     exit_date=trade_day,
                     exit_time=row.trade_time.to_pydatetime(),
                     exit_price=float(triggered_exit),
-                    exit_reason="fixed_stop",
+                    exit_reason=exit_reason,
                     hold_sessions=index + 1,
                     max_high=max_high,
                     min_low=min_low,
@@ -392,6 +412,16 @@ def simulate_trade(candidate: Candidate, entry: EntryDecision, config: StrategyC
         if is_vol_spike and is_no_advance and scheduled_open_exit is None:
             scheduled_open_exit = (future_days[index + 1], "vol_spike_no_advance")
         max_close_since_entry = max(max_close_since_entry, today_close)
+
+        if not profit_lock_activated and day_reached_profit_lock:
+            stop_price = max(stop_price, profit_lock_stop_price)
+            peak_stop_price = max(peak_stop_price, stop_price)
+            profit_lock_activated = True
+
+        if not profit_lock_secondary_activated and day_reached_profit_lock_secondary:
+            stop_price = max(stop_price, profit_lock_secondary_stop_price)
+            peak_stop_price = max(peak_stop_price, stop_price)
+            profit_lock_secondary_activated = True
 
         hold_days = index + 1
         if hold_days >= config.exit.timeout_hold_days and not reached_half_r and scheduled_open_exit is None:

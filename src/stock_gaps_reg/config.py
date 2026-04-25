@@ -36,9 +36,12 @@ class ExitConfig:
     consecutive_close_below_ma_days: int
     timeout_hold_days: int
     timeout_target_r: float
+    profit_lock_target_r: float
     simulation_max_days_after_entry: int
     vol_spike_ma_window: int
     vol_spike_ratio: float
+    profit_lock_secondary_target_r: float = 10.0
+    profit_lock_secondary_stop_r: float = 9.0
 
 
 @dataclass(frozen=True)
