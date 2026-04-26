@@ -130,6 +130,17 @@ python run_analysis.py --trades outputs/<run>/trades.csv --enrich
 python run_analysis.py --trades outputs/<run>/trades.csv --enrich --config config/strategy.yaml
 ```
 
+`run_compare_trades.py`
+
+- Purpose: compare two `trades.csv` files by `ts_code` + `detect_date` and report differences in `exit_date`, `exit_time`, `exit_price`, `exit_reason`, `hold_days`, `pnl_r`, and `max_favorable_excursion_r`
+- Input: any two `trades.csv` files produced by `run_backtest.py`
+
+```bash
+python run_compare_trades.py --left outputs/<run_a>/trades.csv --right outputs/<run_b>/trades.csv
+python run_compare_trades.py --left outputs/<run_a>/trades.csv --right outputs/<run_b>/trades.csv --output outputs/compare_report.csv
+python run_compare_trades.py --left outputs/<run_a>/trades.csv --right outputs/<run_b>/trades.csv --fail-on-diff
+```
+
 `run_fixed_stop_analysis.py`
 
 - Purpose: analyze only `fixed_stop` exits and test simple filter rules against those failure cases
