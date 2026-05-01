@@ -68,10 +68,10 @@ def fetch_index_returns(client: TushareClient, start_date: pd.Timestamp, end_dat
 def enrich_trades(trades: pd.DataFrame, index_returns: pd.DataFrame) -> pd.DataFrame:
     merged = trades.merge(index_returns, on="_buy_date", how="left")
     index_columns = [f"{label}_pct_chg" for _slug, _ts_code, label in INDEX_SPECS]
-    missing_rows = merged[index_columns].isna().any(axis=1)
+    missing_rows = merged["_buy_date"].notna() & merged[index_columns].isna().any(axis=1)
     if bool(missing_rows.any()):
         missing_dates = (
-            merged.loc[missing_rows, "_buy_date"].dt.strftime("%Y-%m-%d").drop_duplicates().tolist()
+            merged.loc[missing_rows, "_buy_date"].dt.strftime("%Y-%m-%d").dropna().drop_duplicates().tolist()
         )
         raise ValueError(f"Missing index data for buy_date values: {', '.join(missing_dates[:10])}")
     return merged.drop(columns=["_buy_date"])

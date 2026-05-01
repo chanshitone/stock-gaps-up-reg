@@ -11,6 +11,9 @@ from .models import Candidate, EntryDecision, SummaryMetrics, TradeResult
 from .tushare_client import TushareClient
 
 
+SHENZHEN_INDEX_TS_CODE = "399001.SZ"
+
+
 def _combine_day_and_hhmm(trade_date: date, hhmm: str) -> datetime:
     target = datetime.strptime(hhmm, "%H:%M").time()
     return datetime.combine(trade_date, target)
@@ -98,6 +101,13 @@ def _vwap_check(
     return vwap_at_end, price_above_vwap, vwap_rising
 
 
+def _index_up_day(client: TushareClient, ts_code: str, trade_date: date) -> tuple[float, bool]:
+    index_daily = client.get_index_daily(ts_code, trade_date, trade_date)
+    index_row = _lookup_row_by_date(index_daily, trade_date)
+    pct_chg = float(index_row["pct_chg"])
+    return pct_chg, pct_chg > 0
+
+
 def _trade_days_after(client: TushareClient, start_date: date, days_needed: int) -> list[date]:
     lookahead_days = max(30, days_needed * 3 + 20)
     for _ in range(6):
@@ -180,6 +190,7 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     gap_size = float(detect_row["low"] - prev_row["high"])
     price_up_ratio = (buy_price - _detect_close) / gap_size if gap_size > 0 else float("nan")
     vwap_at_1430, price_above_vwap, vwap_rising = _vwap_check(buy_minutes, buy_date, buy_price, config.entry.vwap_min_buffer)
+    shenzhen_index_pct_chg, shenzhen_index_up_day = _index_up_day(client, SHENZHEN_INDEX_TS_CODE, buy_date)
 
     before_1400 = _minute_slice(buy_minutes, buy_date, start_time="09:30", end_time="13:59")
     after_1400 = _minute_slice(buy_minutes, buy_date, start_time="14:00", end_time="14:30")
@@ -191,9 +202,17 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
     day1_close_strength_ok = day1_close_strength >= config.entry.day1_min_close_strength
     price_up_ok = not isnan(price_up_ratio) and price_up_ratio >= config.entry.min_price_up_ratio
     vwap_ok = price_above_vwap and vwap_rising
+    shenzhen_index_ok = shenzhen_index_up_day
     no_new_low_ok = (not isnan(day2_low_before_1400) and not isnan(day2_low_after_1400)
                      and day2_low_after_1400 > day2_low_before_1400)
-    eligible = volume_ok and price_up_ok and vwap_ok and no_new_low_ok and (day1_change_ok or day1_close_strength_ok)
+    eligible = (
+        volume_ok
+        and price_up_ok
+        and vwap_ok
+        and shenzhen_index_ok
+        and no_new_low_ok
+        and (day1_change_ok or day1_close_strength_ok)
+    )
 
     notes = {
         "buy_date": buy_date,
@@ -212,6 +231,8 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
         "vwap_at_1430": vwap_at_1430,
         "price_above_vwap": price_above_vwap,
         "vwap_rising_after_1400": vwap_rising,
+        "shenzhen_index_pct_chg": shenzhen_index_pct_chg,
+        "shenzhen_index_up_day": shenzhen_index_up_day,
         "day2_low_before_1400": day2_low_before_1400,
         "day2_low_after_1400": day2_low_after_1400,
         "day1_change_pct": day1_change_pct,
@@ -229,6 +250,8 @@ def evaluate_entry(candidate: Candidate, config: StrategyConfig, client: Tushare
             failed.append("price_up_rule")
         if not vwap_ok:
             failed.append("vwap_rule")
+        if not shenzhen_index_ok:
+            failed.append("shenzhen_index_up_rule")
         if not no_new_low_ok:
             failed.append("no_new_low_after_1400_rule")
         return EntryDecision(eligible=False, reason=";".join(failed), **notes)

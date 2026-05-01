@@ -35,6 +35,8 @@ class EntryDecision:
     day2_low_after_1400: float | None = None
     day1_change_pct: float | None = None
     day1_close_strength: float | None = None
+    shenzhen_index_pct_chg: float | None = None
+    shenzhen_index_up_day: bool = False
     initial_stop_price: float | None = None
     initial_r: float | None = None
 
