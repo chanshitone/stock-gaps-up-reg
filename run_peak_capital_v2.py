@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from run_plot_daily_win_loss import default_daily_win_loss_chart_path, plot_daily_win_loss
 from src.stock_gaps_reg.config import load_config
 from src.stock_gaps_reg.tushare_client import TushareClient
 
@@ -445,6 +446,7 @@ def run(
     total_pnl = base_total_pnl + add_on_total_pnl
     export_path = add_on_csv_path or _default_add_on_csv_path(trades_path)
     daily_win_loss_export_path = daily_win_loss_csv_path or _default_daily_win_loss_csv_path(trades_path)
+    daily_win_loss_chart_path = default_daily_win_loss_chart_path(daily_win_loss_export_path)
     add_on_df = pd.DataFrame(add_on_orders)
     if add_on_df.empty:
         add_on_df = pd.DataFrame(
@@ -465,6 +467,7 @@ def run(
         )
     add_on_df.to_csv(export_path, index=False)
     _export_daily_win_loss(daily, daily_win_loss_export_path)
+    plot_daily_win_loss(daily_win_loss_export_path, daily_win_loss_chart_path)
 
     print(f"\n{'='*70}")
     print("  Peak Capital Calculator V2  (cash-flow model with add-on buys)")
@@ -472,6 +475,7 @@ def run(
     print(f"  Config        : {config_path}")
     print(f"  Add-on CSV    : {export_path}")
     print(f"  Daily W/L CSV : {daily_win_loss_export_path}")
+    print(f"  Daily W/L HTML: {daily_win_loss_chart_path}")
     print(f"  Initial trade : ¥{per_trade:,.0f}")
     print(f"  Add-on trade  : ¥{resolved_add_on_per_trade:,.0f}")
     print(f"  Initial cash  : ¥{starting_principal:,.0f}")

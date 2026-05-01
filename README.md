@@ -180,16 +180,39 @@ python run_peak_capital.py --trades outputs/<run>/trades.csv --per-trade 20000
 - Input: `trades.csv` produced by `run_backtest.py`
 - Sizing: `--per-trade` controls the initial buy-leg capital; `--add-on-per-trade` controls the add-on buy-leg capital and defaults to the same amount as `--per-trade`
 - Add-on rule: after 5 holding days, if the day's high is greater than `buy_price + 1R`, buy one add-on position at the next trading day open, rounded to A-share 100-share lots; that add-on leg exits at the same recorded exit as the original trade
-- Extra outputs: add-on order CSV and daily win/loss equity CSV, written beside `trades.csv` by default
+- Extra outputs: add-on order CSV, daily win/loss equity CSV, and an interactive daily win/loss HTML chart, written beside `trades.csv` by default
 
 ```bash
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --per-trade 20000
-python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --per-trade 15000 --add-on-per-trade 20000
+python run_merge_add_on_orders.py --output-dir outputs/20260424_222104 --output outputs/20260424_222104/merged_add_on_orders.csv
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --initial-principal 132470
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --add-on-csv outputs/<run>/add_on_orders.csv
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --daily-win-loss-csv outputs/<run>/daily_win_loss.csv
+```
+
+`run_merge_add_on_orders.py`
+
+- Purpose: merge an add-on order CSV with the base trade CSV in an output folder and carry over `initial_stop_price` plus `max_favorable_excursion_r`
+- Default discovery: looks for `buy_trades.csv` first, then `trades.csv`, and requires exactly one `*add_on_orders*.csv` file unless `--buy-csv` or `--add-on-csv` is passed
+- Join rule: normalizes `ts_code`, `exit_date`, and `exit_time` before joining, then writes `<add_on_csv_stem>_with_trade_metrics.csv` beside the add-on CSV by default
+
+```bash
+python run_merge_add_on_orders.py --output-dir outputs/<run>
+python run_merge_add_on_orders.py --output-dir outputs/<run> --output outputs/<run>/merged_add_on_orders.csv
+python run_merge_add_on_orders.py --output-dir outputs/<run> --buy-csv outputs/<run>/buy_trades.csv --add-on-csv outputs/<run>/trades_l_add_on_orders.csv
+```
+
+`run_compare_daily_win_loss_with_indices.py`
+
+- Purpose: compare a daily win/loss CSV's daily return column against same-day 上证指数, 深证成指, and 创业板指 percentage changes from Tushare, then write both merged CSV and HTML charts in one run
+- Input: `*_daily_win_loss.csv` produced by `run_peak_capital_v2.py`
+
+```bash
+python run_compare_daily_win_loss_with_indices.py --csv outputs/<run>/*_daily_win_loss.csv
+python run_compare_daily_win_loss_with_indices.py --csv outputs/<run>/*_daily_win_loss.csv --output outputs/<run>/daily_vs_indices.csv
+python run_compare_daily_win_loss_with_indices.py --csv outputs/<run>/*_daily_win_loss.csv --output outputs/<run>/daily_vs_indices.csv --chart-output outputs/<run>/daily_vs_indices.html
 ```
 
 ## Implementation Notes
@@ -207,10 +230,12 @@ python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --daily-win-loss
 
 - `trade_cal` for trading days
 - `daily` for daily OHLCV
+- `index_daily` for index daily percentage changes
 - `stk_mins` for historical minute bars
 
 Official references:
 
 - Tushare `trade_cal`: https://tushare.pro/document/2?doc_id=26
 - Tushare `daily`: https://tushare.pro/document/2?doc_id=27
+- Tushare `index_daily`: https://tushare.pro/document/2?doc_id=95
 - Tushare `stk_mins`: https://tushare.pro/document/2?doc_id=370

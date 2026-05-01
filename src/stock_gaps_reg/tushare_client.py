@@ -77,6 +77,24 @@ class TushareClient:
         frame.to_csv(cache_path, index=False)
         return self._normalize_daily(frame)
 
+    def get_index_daily(self, ts_code: str, start_date: date, end_date: date) -> pd.DataFrame:
+        cache_path = self.daily_cache_dir / f"index_{ts_code}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"
+        if cache_path.exists():
+            return self._load_daily_csv(cache_path)
+
+        frame = self._call_api(
+            "index_daily",
+            self.pro.index_daily,
+            ts_code=ts_code,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+        )
+        if frame.empty:
+            raise ValueError(f"No index daily data returned for {ts_code} between {start_date} and {end_date}.")
+        frame = frame.sort_values("trade_date").reset_index(drop=True)
+        frame.to_csv(cache_path, index=False)
+        return self._normalize_daily(frame)
+
     def get_daily_with_ma(self, ts_code: str, start_date: date, end_date: date, ma_window: int, vol_ma_window: int = 5) -> pd.DataFrame:
         history_start = start_date - timedelta(days=max(ma_window, vol_ma_window) * 3)
         frame = self.get_daily(ts_code, history_start, end_date).copy()
