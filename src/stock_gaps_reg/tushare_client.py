@@ -30,10 +30,12 @@ class TushareClient:
         self.daily_cache_dir = self.cache_dir / "daily"
         self.minute_cache_dir = self.cache_dir / "minute"
         self.calendar_cache_dir = self.cache_dir / "calendar"
+        self.stock_cache_dir = self.cache_dir / "stock"
         self.daily_cache_dir.mkdir(parents=True, exist_ok=True)
         self.minute_cache_dir.mkdir(parents=True, exist_ok=True)
         self.calendar_cache_dir.mkdir(parents=True, exist_ok=True)
-        self.local_minute_data_dir = Path(__file__).resolve().parents[2] / "inputs" / "a_share_1_min"
+        self.stock_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.local_minute_data_dir = Path(r"D:\BaiduNetdiskDownload\01_2021_min_data")
         self.pro = ts.pro_api(token)
 
     def get_trade_calendar(self, start_date: date, end_date: date) -> pd.DataFrame:
@@ -77,6 +79,22 @@ class TushareClient:
         frame.to_csv(cache_path, index=False)
         return self._normalize_daily(frame)
 
+    def get_daily_for_trade_date(self, trade_date: date) -> pd.DataFrame:
+        cache_path = self.daily_cache_dir / f"all_{trade_date:%Y%m%d}.csv"
+        if cache_path.exists():
+            return self._load_daily_csv(cache_path)
+
+        frame = self._call_api(
+            "daily",
+            self.pro.daily,
+            trade_date=trade_date.strftime("%Y%m%d"),
+        )
+        if frame.empty:
+            raise ValueError(f"No market daily data returned for trade date {trade_date}.")
+        frame = frame.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+        frame.to_csv(cache_path, index=False)
+        return self._normalize_daily(frame)
+
     def get_index_daily(self, ts_code: str, start_date: date, end_date: date) -> pd.DataFrame:
         cache_path = self.daily_cache_dir / f"index_{ts_code}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"
         if cache_path.exists():
@@ -94,6 +112,51 @@ class TushareClient:
         frame = frame.sort_values("trade_date").reset_index(drop=True)
         frame.to_csv(cache_path, index=False)
         return self._normalize_daily(frame)
+
+    def get_stock_basic(self, list_status: str = "L") -> pd.DataFrame:
+        cache_path = self.stock_cache_dir / f"stock_basic_{list_status}.csv"
+        if cache_path.exists():
+            return self._load_stock_csv(cache_path)
+
+        frame = self._call_api(
+            "stock_basic",
+            self.pro.stock_basic,
+            exchange="",
+            list_status=list_status,
+            fields="ts_code,symbol,name,area,industry,market,exchange,list_status,list_date,delist_date",
+        )
+        if frame.empty:
+            return self._normalize_stock_basic(frame)
+        frame = frame.sort_values("ts_code").reset_index(drop=True)
+        frame.to_csv(cache_path, index=False)
+        return self._normalize_stock_basic(frame)
+
+    def list_a_share_universe(self, start_date: date, end_date: date) -> pd.DataFrame:
+        frames = [self.get_stock_basic(status) for status in ("L", "D", "P")]
+        universe = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["ts_code"], keep="first")
+        active_mask = (universe["list_date"] <= pd.Timestamp(end_date)) & (
+            universe["delist_date"].isna() | (universe["delist_date"] >= pd.Timestamp(start_date))
+        )
+        market_mask = universe["market"].isin(["主板", "创业板"])
+        exchange_mask = universe["exchange"].isin(["SSE", "SZSE"])
+        filtered = universe.loc[active_mask & market_mask & exchange_mask].copy()
+        return filtered.sort_values("ts_code").reset_index(drop=True)
+
+    def get_stock_st(self, start_date: date, end_date: date) -> pd.DataFrame:
+        cache_path = self.stock_cache_dir / f"stock_st_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"
+        if cache_path.exists():
+            return self._load_stock_st_csv(cache_path)
+
+        frame = self._call_api(
+            "stock_st",
+            self.pro.stock_st,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            fields="ts_code,name,trade_date,type,type_name",
+        )
+        normalized = self._normalize_stock_st(frame)
+        normalized.to_csv(cache_path, index=False)
+        return normalized
 
     def get_daily_with_ma(self, ts_code: str, start_date: date, end_date: date, ma_window: int, vol_ma_window: int = 5) -> pd.DataFrame:
         history_start = start_date - timedelta(days=max(ma_window, vol_ma_window) * 3)
@@ -158,6 +221,14 @@ class TushareClient:
         frame = pd.read_csv(path, dtype={"trade_date": str})
         return self._normalize_daily(frame)
 
+    def _load_stock_csv(self, path: Path) -> pd.DataFrame:
+        frame = pd.read_csv(path, dtype=str).fillna("")
+        return self._normalize_stock_basic(frame)
+
+    def _load_stock_st_csv(self, path: Path) -> pd.DataFrame:
+        frame = pd.read_csv(path, dtype=str).fillna("")
+        return self._normalize_stock_st(frame)
+
     def _load_minute_csv(self, path: Path) -> pd.DataFrame:
         frame = pd.read_csv(path)
         return self._normalize_minutes(frame)
@@ -210,3 +281,19 @@ class TushareClient:
         for column in numeric_columns:
             normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
         return normalized.sort_values("trade_time").reset_index(drop=True)
+
+    @staticmethod
+    def _normalize_stock_basic(frame: pd.DataFrame) -> pd.DataFrame:
+        normalized = frame.copy()
+        if "list_date" in normalized.columns:
+            normalized["list_date"] = pd.to_datetime(normalized["list_date"], format="%Y%m%d", errors="coerce")
+        if "delist_date" in normalized.columns:
+            normalized["delist_date"] = pd.to_datetime(normalized["delist_date"], format="%Y%m%d", errors="coerce")
+        return normalized.sort_values("ts_code").reset_index(drop=True)
+
+    @staticmethod
+    def _normalize_stock_st(frame: pd.DataFrame) -> pd.DataFrame:
+        normalized = frame.copy()
+        if "trade_date" in normalized.columns:
+            normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], format="%Y%m%d", errors="coerce")
+        return normalized.sort_values(["trade_date", "ts_code"]).reset_index(drop=True)

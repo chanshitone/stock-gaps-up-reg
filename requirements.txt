@@ -1,4 +1,6 @@
 pandas>=2.2
+pandas>=2.2
+numpy>=2.0
 plotly>=6.0
 pyarrow>=18.0
 tushare>=1.2

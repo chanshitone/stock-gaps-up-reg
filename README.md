@@ -118,6 +118,19 @@ python run_detect_window_stats.py --candidates inputs/candidates.sample.csv --co
 python run_detect_window_stats.py --candidates inputs/candidates.csv --window-trading-days 5 --output-dir outputs/detect_window_stats/rerun
 ```
 
+`run_discover_candidates.py`
+
+- Purpose: use Tushare daily data to discover historical candidate rows for backtests over a date range
+- Universe: 上证主板 + 深证主板 + 创业板; excludes 科创板 and 北交所 by `stock_basic.market`
+- ST handling: the discovery script currently keeps ST stocks and does not call `stock_st`, so it works in environments without that Tushare permission
+- Output: `candidates.csv` and `summary.csv` under `outputs/discover_candidates/<timestamp>/` by default
+
+```bash
+python run_discover_candidates.py --start-date 2021-01-01 --end-date 2021-12-31
+python run_discover_candidates.py --start-date 20200101 --end-date 20221231 --config config/strategy.yaml
+python run_discover_candidates.py --start-date 2018-01-01 --end-date 2020-12-31 --output-dir outputs/discover_candidates/rerun
+```
+
 `run_analysis.py`
 
 - Purpose: analyze traded rows in a `trades.csv` file to compare winners vs losers across entry features
@@ -230,6 +243,7 @@ python run_compare_daily_win_loss_with_indices.py --csv outputs/<run>/*_daily_wi
 
 - `trade_cal` for trading days
 - `daily` for daily OHLCV
+- `stock_basic` for historical stock universe and board filtering
 - `index_daily` for index daily percentage changes
 - `stk_mins` for historical minute bars
 
@@ -237,5 +251,6 @@ Official references:
 
 - Tushare `trade_cal`: https://tushare.pro/document/2?doc_id=26
 - Tushare `daily`: https://tushare.pro/document/2?doc_id=27
+- Tushare `stock_basic`: https://tushare.pro/document/2?doc_id=25
 - Tushare `index_daily`: https://tushare.pro/document/2?doc_id=95
 - Tushare `stk_mins`: https://tushare.pro/document/2?doc_id=370
