@@ -59,18 +59,42 @@ def _pnl_bar_color(value: float) -> str:
     return "#8d99ae"
 
 
+def _build_monthly_pnl(daily: pd.DataFrame) -> pd.DataFrame:
+    monthly = daily.copy()
+    monthly["month"] = monthly["date"].dt.to_period("M").dt.to_timestamp()
+    monthly = (
+        monthly.groupby("month", as_index=False)
+        .agg(
+            monthly_pnl=("daily_pnl", "sum"),
+            first_equity=("equity", "first"),
+            first_daily_pnl=("daily_pnl", "first"),
+            end_equity=("equity", "last"),
+            trading_days=("date", "count"),
+        )
+    )
+    monthly["start_equity"] = monthly["first_equity"] - monthly["first_daily_pnl"]
+    monthly["monthly_return_pct"] = monthly.apply(
+        lambda row: float(row["monthly_pnl"]) / float(row["start_equity"]) * 100.0
+        if float(row["start_equity"])
+        else 0.0,
+        axis=1,
+    )
+    return monthly
+
+
 def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = None) -> Path:
     daily = _load_daily(csv_path)
     plot_title = title or _build_title(daily, csv_path)
 
     dates = daily["date"]
+    monthly = _build_monthly_pnl(daily)
     figure = make_subplots(
-        rows=3,
+        rows=4,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.05,
-        row_heights=[0.5, 0.3, 0.2],
-        specs=[[{}], [{}], [{"secondary_y": True}]],
+        row_heights=[0.42, 0.24, 0.18, 0.16],
+        specs=[[{}], [{}], [{}], [{"secondary_y": True}]],
     )
 
     if "equity_peak" in daily.columns:
@@ -144,6 +168,26 @@ def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = N
         col=1,
     )
 
+    monthly_bar_colors = monthly["monthly_pnl"].apply(_pnl_bar_color)
+    figure.add_trace(
+        go.Bar(
+            x=monthly["month"],
+            y=monthly["monthly_pnl"],
+            name="Monthly P&L",
+            marker_color=monthly_bar_colors.tolist(),
+            customdata=monthly[["monthly_return_pct", "end_equity", "trading_days"]].to_numpy(),
+            hovertemplate=(
+                "%{x|%Y-%m}<br>"
+                "Monthly P&L: CNY %{y:,.2f}<br>"
+                "Monthly return: %{customdata[0]:.2f}%<br>"
+                "End equity: CNY %{customdata[1]:,.2f}<br>"
+                "Days: %{customdata[2]}<extra></extra>"
+            ),
+        ),
+        row=3,
+        col=1,
+    )
+
     figure.add_trace(
         go.Scatter(
             x=dates,
@@ -155,7 +199,7 @@ def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = N
             fillcolor="rgba(106, 76, 147, 0.12)",
             hovertemplate="%{x|%Y-%m-%d}<br>Positions: %{y}<extra></extra>",
         ),
-        row=3,
+        row=4,
         col=1,
         secondary_y=False,
     )
@@ -168,7 +212,7 @@ def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = N
             line={"color": "#ff9f1c", "width": 2.0},
             hovertemplate="%{x|%Y-%m-%d}<br>Return: %{y:.2f}%<extra></extra>",
         ),
-        row=3,
+        row=4,
         col=1,
         secondary_y=True,
     )
@@ -179,14 +223,15 @@ def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = N
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
         bargap=0.1,
-        height=950,
+        height=1150,
         margin={"l": 70, "r": 70, "t": 90, "b": 60},
     )
     figure.update_xaxes(showgrid=False, rangeslider_visible=False)
     figure.update_yaxes(title_text="Equity (CNY)", row=1, col=1, gridcolor="rgba(0,0,0,0.08)")
     figure.update_yaxes(title_text="Daily P&L", row=2, col=1, zeroline=True, zerolinecolor="#6c757d", gridcolor="rgba(0,0,0,0.08)")
-    figure.update_yaxes(title_text="Positions", row=3, col=1, secondary_y=False, gridcolor="rgba(0,0,0,0.08)")
-    figure.update_yaxes(title_text="Return %", row=3, col=1, secondary_y=True, showgrid=False)
+    figure.update_yaxes(title_text="Monthly P&L", row=3, col=1, zeroline=True, zerolinecolor="#6c757d", gridcolor="rgba(0,0,0,0.08)")
+    figure.update_yaxes(title_text="Positions", row=4, col=1, secondary_y=False, gridcolor="rgba(0,0,0,0.08)")
+    figure.update_yaxes(title_text="Return %", row=4, col=1, secondary_y=True, showgrid=False)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.write_html(output_path, include_plotlyjs="cdn", full_html=True)
