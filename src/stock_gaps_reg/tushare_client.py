@@ -17,6 +17,7 @@ import tushare as ts
 class TushareClient:
     cache_dir: Path
     exchange: str = "SSE"
+    local_minute_data_dir: Path | None = None
     pause_seconds: float = 0.2
     rate_limit_retry_seconds: float = 1.0
     max_retries: int = 1
@@ -35,7 +36,8 @@ class TushareClient:
         self.minute_cache_dir.mkdir(parents=True, exist_ok=True)
         self.calendar_cache_dir.mkdir(parents=True, exist_ok=True)
         self.stock_cache_dir.mkdir(parents=True, exist_ok=True)
-        self.local_minute_data_dir = Path(r"D:\BaiduNetdiskDownload\01_2021_min_data")
+        if self.local_minute_data_dir is None:
+            self.local_minute_data_dir = Path(r"D:\BaiduNetdiskDownload\01_2021_min_data")
         self.pro = ts.pro_api(token)
 
     def get_trade_calendar(self, start_date: date, end_date: date) -> pd.DataFrame:
@@ -170,12 +172,30 @@ class TushareClient:
         if cache_path.exists():
             return self._load_minute_csv(cache_path)
 
-        frame = self._load_minutes_from_parquet(ts_code, trade_date, freq)
+        frame = self._load_minutes_from_local_data(ts_code, trade_date, freq)
         if frame.empty:
             raise ValueError(f"No minute data returned for {ts_code} on {trade_date}.")
         frame = frame.sort_values("trade_time").reset_index(drop=True)
         frame.to_csv(cache_path, index=False)
         return self._normalize_minutes(frame)
+
+    def _load_minutes_from_local_data(self, ts_code: str, trade_date: date, freq: str) -> pd.DataFrame:
+        if freq != "1min":
+            raise ValueError(f"Local minute data only supports freq='1min', got {freq!r}.")
+        assert self.local_minute_data_dir is not None
+        csv_path = self.local_minute_data_dir / f"stk_mins_{trade_date:%Y%m%d}.csv"
+        if csv_path.exists():
+            return self._load_minutes_from_daily_csv(csv_path, ts_code)
+        return self._load_minutes_from_parquet(ts_code, trade_date, freq)
+
+    def _load_minutes_from_daily_csv(self, path: Path, ts_code: str) -> pd.DataFrame:
+        chunks = pd.read_csv(path, chunksize=200_000)
+        frames = [chunk.loc[chunk["ts_code"] == ts_code] for chunk in chunks]
+        matches = [frame for frame in frames if not frame.empty]
+        if not matches:
+            return pd.DataFrame(columns=["trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount"])
+        frame = pd.concat(matches, ignore_index=True)
+        return frame[["trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount"]]
 
     def _load_minutes_from_parquet(self, ts_code: str, trade_date: date, freq: str) -> pd.DataFrame:
         if freq != "1min":

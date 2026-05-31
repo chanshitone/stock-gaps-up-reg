@@ -42,7 +42,11 @@ def main() -> None:
     output_root = args.output_dir.resolve() if args.output_dir else config.data.output_dir
     run_dir = make_run_dir(output_root)
 
-    client = TushareClient(cache_dir=config.data.cache_dir, exchange=config.market.exchange)
+    client = TushareClient(
+        cache_dir=config.data.cache_dir,
+        exchange=config.market.exchange,
+        local_minute_data_dir=config.data.minute_data_dir,
+    )
     results = run_strategy(candidates, config, client)
     summary = summarize_results(results)
     trades_path, summary_path = write_reports(run_dir, results, summary)

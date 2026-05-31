@@ -29,5 +29,6 @@ exit:
 
 data:
   minute_freq: 1min
+  minute_data_dir: D:\BaiduNetdiskDownload\2605\stk_mins-2605\stk_mins
   cache_dir: data/cache
   output_dir: outputs

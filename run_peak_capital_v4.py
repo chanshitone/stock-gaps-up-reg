@@ -35,13 +35,17 @@ Usage:
     python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
     python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --add-on-csv outputs/<run>/add_on_orders.csv
     python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --daily-win-loss-csv outputs/<run>/daily_win_loss.csv
+    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --output-txt outputs/<run>/peak_capital_v4_report.txt
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
 import heapq
+import sys
 from datetime import datetime, time
 from pathlib import Path
+from typing import TextIO
 
 import pandas as pd
 
@@ -63,6 +67,24 @@ def _default_add_on_csv_path(trades_path: Path) -> Path:
 
 def _default_daily_win_loss_csv_path(trades_path: Path) -> Path:
     return trades_path.with_name(f"{trades_path.stem}_daily_win_loss.csv")
+
+
+def _default_output_txt_path(trades_path: Path) -> Path:
+    return trades_path.with_name(f"{trades_path.stem}_peak_capital_v4_report.txt")
+
+
+class _Tee:
+    def __init__(self, *streams: TextIO) -> None:
+        self.streams = streams
+
+    def write(self, text: str) -> int:
+        for stream in self.streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
 
 
 def _lot_shares(capital: float, price: float) -> int:
@@ -521,6 +543,9 @@ def run(
     daily = _build_daily_equity(ev, position_legs, client, starting_principal)
     max_raise = _max_raise_stats(daily)
     max_pullback = _max_pullback_stats(daily)
+    max_market_value_idx = daily["market_value"].idxmax()
+    max_market_value = float(daily.loc[max_market_value_idx, "market_value"])
+    max_market_value_positions = int(daily.loc[max_market_value_idx, "positions"])
 
     executed_trades = traded.loc[accepted_indices].copy()
     base_total_pnl = (executed_trades["exit_proceeds"] - executed_trades["actual_cost"]).sum()
@@ -589,6 +614,9 @@ def run(
     print(f"  Min principal needed : ¥{peak_capital:,.0f}")
     print(f"  Bottleneck time      : {peak_date.strftime('%Y-%m-%d %H:%M')}")
     print(f"  Holdings at bottom   : {int(peak_positions)}")
+    print(f"  Max market value     : ¥{max_market_value:,.2f}")
+    print(f"  Max MV date          : {pd.Timestamp(max_market_value_idx).strftime('%Y-%m-%d')}")
+    print(f"  Max MV positions     : {max_market_value_positions}")
     print(f"  Final cash balance   : ¥{starting_principal + ev['cum_cash'].iloc[-1]:,.0f}")
     print(f"  Final equity         : ¥{daily['equity'].iloc[-1]:,.2f}")
     print(
@@ -665,20 +693,33 @@ def main() -> None:
         default=None,
         help="Path to export daily win/loss as CSV (default: beside trades CSV).",
     )
+    parser.add_argument(
+        "--output-txt",
+        type=Path,
+        default=None,
+        help="Path to write the console report as TXT (default: beside trades CSV).",
+    )
     args = parser.parse_args()
     if args.max_positions is not None and args.max_positions <= 0:
         parser.error("--max-positions must be a positive integer")
 
-    run(
-        args.trades.resolve(),
-        args.per_trade,
-        args.add_on_per_trade,
-        args.config.resolve(),
-        args.add_on_csv.resolve() if args.add_on_csv else None,
-        args.daily_win_loss_csv.resolve() if args.daily_win_loss_csv else None,
-        args.initial_principal,
-        args.max_positions,
-    )
+    trades_path = args.trades.resolve()
+    output_txt_path = args.output_txt.resolve() if args.output_txt else _default_output_txt_path(trades_path)
+    output_txt_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_txt_path.open("w", encoding="utf-8") as report_file:
+        with redirect_stdout(_Tee(sys.stdout, report_file)):
+            print(f"TXT report    : {output_txt_path}")
+            run(
+                trades_path,
+                args.per_trade,
+                args.add_on_per_trade,
+                args.config.resolve(),
+                args.add_on_csv.resolve() if args.add_on_csv else None,
+                args.daily_win_loss_csv.resolve() if args.daily_win_loss_csv else None,
+                args.initial_principal,
+                args.max_positions,
+            )
 
 
 if __name__ == "__main__":

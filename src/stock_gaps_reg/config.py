@@ -49,6 +49,7 @@ class DataConfig:
     minute_freq: str
     cache_dir: Path
     output_dir: Path
+    minute_data_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ def load_config(path: Path) -> StrategyConfig:
     risk = payload["risk"]
     exit_config = payload["exit"]
     data = payload["data"]
+    minute_data_dir = data.get("minute_data_dir")
 
     if "min_price_up_ratio" not in entry and "max_gap_fill_ratio" in entry:
         entry["min_price_up_ratio"] = -float(entry["max_gap_fill_ratio"])
@@ -91,5 +93,6 @@ def load_config(path: Path) -> StrategyConfig:
             minute_freq=data["minute_freq"],
             cache_dir=(base_dir / data["cache_dir"]).resolve(),
             output_dir=(base_dir / data["output_dir"]).resolve(),
+            minute_data_dir=Path(minute_data_dir).resolve() if minute_data_dir else None,
         ),
     )

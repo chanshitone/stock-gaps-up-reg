@@ -7,6 +7,21 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from src.stock_gaps_reg.daily_vs_indices_common import INDEX_SPECS
+from src.stock_gaps_reg.tushare_client import TushareClient
+
+
+INDEX_LABELS = {
+    "shanghai": "Shanghai Index",
+    "shenzhen": "Shenzhen Component",
+    "chinext": "ChiNext Index",
+}
+INDEX_COLORS = {
+    "shanghai": "#457b9d",
+    "shenzhen": "#2a9d8f",
+    "chinext": "#e76f51",
+}
+
 
 def default_daily_win_loss_chart_path(csv_path: Path) -> Path:
     return csv_path.with_suffix(".html")
@@ -82,19 +97,53 @@ def _build_monthly_pnl(daily: pd.DataFrame) -> pd.DataFrame:
     return monthly
 
 
+def _build_monthly_indices(daily: pd.DataFrame, cache_dir: Path = Path("data/cache")) -> pd.DataFrame:
+    start_date = daily["date"].min().date()
+    end_date = daily["date"].max().date()
+    client = TushareClient(cache_dir=cache_dir.resolve())
+    monthly_indices: pd.DataFrame | None = None
+
+    for slug, ts_code, _label in INDEX_SPECS:
+        index_daily = client.get_index_daily(ts_code, start_date, end_date).copy()
+        index_daily["month"] = index_daily["trade_date"].dt.to_period("M").dt.to_timestamp()
+        monthly = (
+            index_daily.groupby("month", as_index=False)
+            .agg(
+                first_pre_close=("pre_close", "first"),
+                end_close=("close", "last"),
+                trading_days=("trade_date", "count"),
+            )
+        )
+        monthly[f"{slug}_monthly_pct"] = monthly.apply(
+            lambda row: (float(row["end_close"]) / float(row["first_pre_close"]) - 1.0) * 100.0
+            if float(row["first_pre_close"])
+            else 0.0,
+            axis=1,
+        )
+        subset = monthly[["month", f"{slug}_monthly_pct"]]
+        if monthly_indices is None:
+            monthly_indices = subset
+        else:
+            monthly_indices = monthly_indices.merge(subset, on="month", how="outer")
+
+    assert monthly_indices is not None
+    return monthly_indices.sort_values("month").reset_index(drop=True)
+
+
 def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = None) -> Path:
     daily = _load_daily(csv_path)
     plot_title = title or _build_title(daily, csv_path)
 
     dates = daily["date"]
     monthly = _build_monthly_pnl(daily)
+    monthly_indices = _build_monthly_indices(daily)
     figure = make_subplots(
         rows=4,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.05,
         row_heights=[0.42, 0.24, 0.18, 0.16],
-        specs=[[{}], [{}], [{}], [{"secondary_y": True}]],
+        specs=[[{}], [{}], [{"secondary_y": True}], [{"secondary_y": True}]],
     )
 
     if "equity_peak" in daily.columns:
@@ -187,6 +236,25 @@ def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = N
         row=3,
         col=1,
     )
+    for slug, _ts_code, _label in INDEX_SPECS:
+        index_col = f"{slug}_monthly_pct"
+        figure.add_trace(
+            go.Scatter(
+                x=monthly_indices["month"],
+                y=monthly_indices[index_col],
+                mode="lines+markers",
+                name=f"{INDEX_LABELS.get(slug, slug)} monthly %",
+                line={"color": INDEX_COLORS.get(slug, "#495057"), "width": 2.0},
+                marker={"size": 6},
+                hovertemplate=(
+                    "%{x|%Y-%m}<br>"
+                    f"{INDEX_LABELS.get(slug, slug)} monthly change: %{{y:.2f}}%<extra></extra>"
+                ),
+            ),
+            row=3,
+            col=1,
+            secondary_y=True,
+        )
 
     figure.add_trace(
         go.Scatter(
@@ -229,7 +297,16 @@ def plot_daily_win_loss(csv_path: Path, output_path: Path, title: str | None = N
     figure.update_xaxes(showgrid=False, rangeslider_visible=False)
     figure.update_yaxes(title_text="Equity (CNY)", row=1, col=1, gridcolor="rgba(0,0,0,0.08)")
     figure.update_yaxes(title_text="Daily P&L", row=2, col=1, zeroline=True, zerolinecolor="#6c757d", gridcolor="rgba(0,0,0,0.08)")
-    figure.update_yaxes(title_text="Monthly P&L", row=3, col=1, zeroline=True, zerolinecolor="#6c757d", gridcolor="rgba(0,0,0,0.08)")
+    figure.update_yaxes(
+        title_text="Monthly P&L",
+        row=3,
+        col=1,
+        secondary_y=False,
+        zeroline=True,
+        zerolinecolor="#6c757d",
+        gridcolor="rgba(0,0,0,0.08)",
+    )
+    figure.update_yaxes(title_text="Index monthly %", row=3, col=1, secondary_y=True, showgrid=False)
     figure.update_yaxes(title_text="Positions", row=4, col=1, secondary_y=False, gridcolor="rgba(0,0,0,0.08)")
     figure.update_yaxes(title_text="Return %", row=4, col=1, secondary_y=True, showgrid=False)
 
