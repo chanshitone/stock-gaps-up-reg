@@ -6,12 +6,11 @@ Simulates the timeline of all accepted trades and finds the maximum concurrent
 capital deployed at any single point in time. Capital is freed on exit_date and
 can be reused by later trades.
 
-This v4 variant keeps the v3 sizing logic and adds one portfolio constraint:
+This v4.5 variant keeps the v4 cash-flow logic, but simplifies the index rule:
     - initial amount starts from 15,000 CNY per stock
     - index-based position sizing scheme is fixed at (0, 0.7, 1.3)
         - Shenzhen Component minute data is read from D:\\BaiduNetdiskDownload\\指数分时
-        - 399001.SZ must be stable from 14:00 through 14:30 for the day to be buyable
-        - 14:30 intraday pct change becomes entry_shenzhen_index_pct_chg
+        - only the 14:30 intraday pct change is used as the buyability/sizing basis
         - if entry_shenzhen_index_pct_chg <= 0, initial position size is 0x
         - if 0 < entry_shenzhen_index_pct_chg <= 0.2, initial position size is 0.7x
         - if entry_shenzhen_index_pct_chg > 0.2, initial position size is 1.3x
@@ -31,14 +30,15 @@ The added position exits at the same exit_time and exit_price as the original
 trade recorded in the trades CSV.
 
 Usage:
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --per-trade 15000 --add-on-per-trade 20000
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --max-positions 10
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --max-positions 10 --initial-principal 132470
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --add-on-csv outputs/<run>/add_on_orders.csv
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --daily-win-loss-csv outputs/<run>/daily_win_loss.csv
-    python run_peak_capital_v4.py --trades outputs/<run>/trades.csv --output-txt outputs/<run>/peak_capital_v4_report.txt
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --per-trade 15000 --add-on-per-trade 20000
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --max-positions 10
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --max-positions 10 --initial-principal 132470
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --add-on-csv outputs/<run>/add_on_orders.csv
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --daily-win-loss-csv outputs/<run>/daily_win_loss.csv
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --daily-positions-csv outputs/<run>/daily_positions.csv
+    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --output-txt outputs/<run>/peak_capital_v4_5_report.txt
 """
 from __future__ import annotations
 
@@ -61,13 +61,9 @@ from src.stock_gaps_reg.tushare_client import TushareClient
 DEFAULT_PER_TRADE = 15000.0
 DEFAULT_INDEX_COLUMN = "entry_shenzhen_index_pct_chg"
 INDEX_1430_COLUMN = "entry_shenzhen_index_1430_pct_chg"
-INDEX_STABLE_COLUMN = "entry_shenzhen_index_stable_after_1400"
-INDEX_STABILITY_MIN_COLUMN = "entry_shenzhen_index_min_pct_after_1400"
-INDEX_1400_COLUMN = "entry_shenzhen_index_1400_pct_chg"
 DEFAULT_INDEX_MINUTE_DIR = Path(r"D:\BaiduNetdiskDownload\指数分时")
 SHENZHEN_INDEX_CODE = "399001"
 SHENZHEN_INDEX_TS_CODE = "399001.SZ"
-INDEX_STABLE_START = time(hour=14, minute=0)
 INDEX_DECISION_TIME = time(hour=14, minute=30)
 POSITION_SCHEME = (0.0, 0.7, 1.3)
 ADD_ON_MIN_HOLD_DAYS = 6
@@ -82,8 +78,12 @@ def _default_daily_win_loss_csv_path(trades_path: Path) -> Path:
     return trades_path.with_name(f"{trades_path.stem}_daily_win_loss.csv")
 
 
+def _default_daily_positions_csv_path(trades_path: Path) -> Path:
+    return trades_path.with_name(f"{trades_path.stem}_daily_positions.csv")
+
+
 def _default_output_txt_path(trades_path: Path) -> Path:
-    return trades_path.with_name(f"{trades_path.stem}_peak_capital_v4_report.txt")
+    return trades_path.with_name(f"{trades_path.stem}_peak_capital_v4_5_report.txt")
 
 
 class _Tee:
@@ -182,7 +182,6 @@ def _index_bar_at_or_before(day_minutes: pd.DataFrame, target_time: time) -> pd.
 def _build_index_condition_map(
     traded: pd.DataFrame,
     index_minute_dir: Path,
-    stability_tolerance_pct: float,
 ) -> dict[date, dict[str, object]]:
     buy_dates = sorted(
         {
@@ -208,44 +207,22 @@ def _build_index_condition_map(
             result[buy_date] = {
                 DEFAULT_INDEX_COLUMN: float("nan"),
                 INDEX_1430_COLUMN: float("nan"),
-                INDEX_1400_COLUMN: float("nan"),
-                INDEX_STABILITY_MIN_COLUMN: float("nan"),
-                INDEX_STABLE_COLUMN: False,
             }
             continue
 
         open_price = float(day_minutes.iloc[0]["open"])
-        bar_1400 = _index_bar_at_or_before(day_minutes, INDEX_STABLE_START)
         bar_1430 = _index_bar_at_or_before(day_minutes, INDEX_DECISION_TIME)
-        if open_price <= 0 or bar_1400 is None or bar_1430 is None:
+        if open_price <= 0 or bar_1430 is None:
             result[buy_date] = {
                 DEFAULT_INDEX_COLUMN: float("nan"),
                 INDEX_1430_COLUMN: float("nan"),
-                INDEX_1400_COLUMN: float("nan"),
-                INDEX_STABILITY_MIN_COLUMN: float("nan"),
-                INDEX_STABLE_COLUMN: False,
             }
             continue
 
-        window = day_minutes[
-            (day_minutes["trade_time"].dt.time >= INDEX_STABLE_START)
-            & (day_minutes["trade_time"].dt.time <= INDEX_DECISION_TIME)
-        ].copy()
-        window["pct_chg"] = (window["close"] / open_price - 1.0) * 100.0
-        pct_1400 = (float(bar_1400["close"]) / open_price - 1.0) * 100.0
         pct_1430 = (float(bar_1430["close"]) / open_price - 1.0) * 100.0
-        min_pct_after_1400 = float(window["pct_chg"].min()) if not window.empty else float("nan")
-        stable_after_1400 = (
-            not pd.isna(min_pct_after_1400)
-            and min_pct_after_1400 >= pct_1400 - stability_tolerance_pct
-            and pct_1430 >= pct_1400 - stability_tolerance_pct
-        )
         result[buy_date] = {
             DEFAULT_INDEX_COLUMN: pct_1430,
             INDEX_1430_COLUMN: pct_1430,
-            INDEX_1400_COLUMN: pct_1400,
-            INDEX_STABILITY_MIN_COLUMN: min_pct_after_1400,
-            INDEX_STABLE_COLUMN: stable_after_1400,
         }
 
     return result
@@ -254,11 +231,10 @@ def _build_index_condition_map(
 def _apply_index_conditions(
     traded: pd.DataFrame,
     index_minute_dir: Path,
-    stability_tolerance_pct: float,
 ) -> pd.DataFrame:
-    condition_map = _build_index_condition_map(traded, index_minute_dir, stability_tolerance_pct)
+    condition_map = _build_index_condition_map(traded, index_minute_dir)
     enriched = traded.copy()
-    for column in (DEFAULT_INDEX_COLUMN, INDEX_1430_COLUMN, INDEX_1400_COLUMN, INDEX_STABILITY_MIN_COLUMN, INDEX_STABLE_COLUMN):
+    for column in (DEFAULT_INDEX_COLUMN, INDEX_1430_COLUMN):
         enriched[column] = enriched["buy_date"].apply(
             lambda value, col=column: condition_map.get(pd.Timestamp(value).date(), {}).get(col)
             if pd.notna(value)
@@ -273,6 +249,9 @@ def _append_position_leg(
     buy_time: pd.Timestamp,
     exit_time: pd.Timestamp,
     shares: int,
+    leg_type: str = "position",
+    buy_price: float | None = None,
+    buy_cost: float | None = None,
 ) -> None:
     position_legs.append(
         {
@@ -280,6 +259,9 @@ def _append_position_leg(
             "buy_time": buy_time,
             "exit_time": exit_time,
             "shares": shares,
+            "leg_type": leg_type,
+            "buy_price": buy_price,
+            "buy_cost": buy_cost,
         }
     )
 
@@ -517,6 +499,87 @@ def _export_daily_win_loss(daily: pd.DataFrame, export_path: Path) -> None:
     visible_daily.to_csv(export_path, index=False)
 
 
+def _format_position_item(leg: dict[str, object]) -> str:
+    details = []
+    if leg.get("leg_type"):
+        details.append(str(leg["leg_type"]))
+    if leg.get("shares") is not None:
+        details.append(f"{int(leg['shares'])}sh")
+    if leg.get("buy_price") is not None and pd.notna(leg.get("buy_price")):
+        details.append(f"@{float(leg['buy_price']):.2f}")
+    return f"{leg['ts_code']}({','.join(details)})" if details else str(leg["ts_code"])
+
+
+def _join_position_items(legs: list[dict[str, object]]) -> str:
+    return "; ".join(_format_position_item(leg) for leg in sorted(legs, key=lambda item: (str(item["ts_code"]), str(item.get("leg_type", "")))))
+
+
+def _join_ts_codes(legs: list[dict[str, object]]) -> str:
+    return "; ".join(sorted({str(leg["ts_code"]) for leg in legs}))
+
+
+def _build_daily_positions(
+    daily: pd.DataFrame,
+    position_legs: list[dict[str, object]],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for dt in daily.index:
+        close_time = pd.Timestamp(datetime.combine(pd.Timestamp(dt).date(), time(hour=15)))
+        day_legs = [
+            leg
+            for leg in position_legs
+            if pd.Timestamp(leg["buy_time"]) <= close_time < pd.Timestamp(leg["exit_time"])
+        ]
+        opening_legs = [
+            leg
+            for leg in position_legs
+            if pd.Timestamp(leg["buy_time"]).date() == pd.Timestamp(dt).date()
+        ]
+        initial_opening_legs = [leg for leg in opening_legs if leg.get("leg_type") == "initial"]
+        add_on_opening_legs = [leg for leg in opening_legs if leg.get("leg_type") == "add_on"]
+
+        rows.append(
+            {
+                "date": pd.Timestamp(dt).date(),
+                "holding_count": len(day_legs),
+                "holding_stock_count": len({str(leg["ts_code"]) for leg in day_legs}),
+                "holding_stock_list": _join_ts_codes(day_legs),
+                "holding_list": _join_position_items(day_legs),
+                "opening_count": len(opening_legs),
+                "opening_stock_count": len({str(leg["ts_code"]) for leg in opening_legs}),
+                "opening_stock_list": _join_ts_codes(opening_legs),
+                "opening_list": _join_position_items(opening_legs),
+                "initial_opening_count": len(initial_opening_legs),
+                "initial_opening_list": _join_position_items(initial_opening_legs),
+                "add_on_opening_count": len(add_on_opening_legs),
+                "add_on_opening_list": _join_position_items(add_on_opening_legs),
+            }
+        )
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "date",
+            "holding_count",
+            "holding_stock_count",
+            "holding_stock_list",
+            "holding_list",
+            "opening_count",
+            "opening_stock_count",
+            "opening_stock_list",
+            "opening_list",
+            "initial_opening_count",
+            "initial_opening_list",
+            "add_on_opening_count",
+            "add_on_opening_list",
+        ],
+    )
+
+
+def _export_daily_positions(daily: pd.DataFrame, position_legs: list[dict[str, object]], export_path: Path) -> None:
+    _build_daily_positions(daily, position_legs).to_csv(export_path, index=False, encoding="utf-8-sig")
+
+
 def _find_add_on_order(
     row: pd.Series,
     client: TushareClient,
@@ -557,14 +620,8 @@ def _find_add_on_order(
 
 def _apply_initial_position_sizing(traded: pd.DataFrame, per_trade: float) -> pd.DataFrame:
     sized = traded.copy()
-    if INDEX_STABLE_COLUMN not in sized.columns:
-        sized[INDEX_STABLE_COLUMN] = True
-
-    sized[["position_bucket", "size_multiplier"]] = sized.apply(
-        lambda row: pd.Series(_classify_position_size(float(row[DEFAULT_INDEX_COLUMN])))
-        if bool(row[INDEX_STABLE_COLUMN]) and pd.notna(row.get(DEFAULT_INDEX_COLUMN))
-        else pd.Series(("unstable_or_missing", 0.0)),
-        axis=1,
+    sized[["position_bucket", "size_multiplier"]] = sized[DEFAULT_INDEX_COLUMN].apply(
+        lambda value: pd.Series(_classify_position_size(float(value))) if pd.notna(value) else pd.Series(("missing", 0.0))
     )
     sized["position_capital"] = per_trade * sized["size_multiplier"]
     sized["shares"] = sized.apply(
@@ -613,7 +670,16 @@ def _build_trade_timeline(
 
         events.append((buy_dt, 1, -row["actual_cost"], 1, row["ts_code"], "initial_buy"))
         events.append((exit_dt, 0, row["exit_proceeds"], -1, row["ts_code"], "initial_exit"))
-        _append_position_leg(position_legs, row["ts_code"], buy_dt, exit_dt, int(row["shares"]))
+        _append_position_leg(
+            position_legs,
+            row["ts_code"],
+            buy_dt,
+            exit_dt,
+            int(row["shares"]),
+            "initial",
+            float(row["buy_price"]),
+            float(row["actual_cost"]),
+        )
 
         add_on = _find_add_on_order(row, client, resolved_add_on_per_trade)
         if add_on is None:
@@ -639,7 +705,16 @@ def _build_trade_timeline(
         )
         events.append((add_on["add_time"], 1, -add_on["add_cost"], 0, row["ts_code"], "add_on_buy"))
         events.append((exit_dt, 0, add_on["exit_proceeds"], 0, row["ts_code"], "add_on_exit"))
-        _append_position_leg(position_legs, row["ts_code"], pd.Timestamp(add_on["add_time"]), exit_dt, int(add_on["add_shares"]))
+        _append_position_leg(
+            position_legs,
+            row["ts_code"],
+            pd.Timestamp(add_on["add_time"]),
+            exit_dt,
+            int(add_on["add_shares"]),
+            "add_on",
+            float(add_on["add_price"]),
+            float(add_on["add_cost"]),
+        )
 
     return events, add_on_orders, position_legs, accepted_indices, capped_out_indices
 
@@ -651,10 +726,10 @@ def run(
     config_path: Path,
     add_on_csv_path: Path | None,
     daily_win_loss_csv_path: Path | None,
+    daily_positions_csv_path: Path | None,
     initial_principal: float | None,
     max_positions: int | None,
     index_minute_dir: Path,
-    index_stability_tolerance_pct: float,
 ) -> None:
     traded = _load_traded_rows(trades_path)
     if traded.empty:
@@ -668,7 +743,7 @@ def run(
     )
     resolved_add_on_per_trade = per_trade if add_on_per_trade is None else float(add_on_per_trade)
 
-    traded = _apply_index_conditions(traded, index_minute_dir, index_stability_tolerance_pct)
+    traded = _apply_index_conditions(traded, index_minute_dir)
     traded = _apply_initial_position_sizing(traded, per_trade)
     events, add_on_orders, position_legs, accepted_indices, capped_out_indices = _build_trade_timeline(
         traded,
@@ -712,6 +787,7 @@ def run(
     total_pnl = base_total_pnl + add_on_total_pnl
     export_path = add_on_csv_path or _default_add_on_csv_path(trades_path)
     daily_win_loss_export_path = daily_win_loss_csv_path or _default_daily_win_loss_csv_path(trades_path)
+    daily_positions_export_path = daily_positions_csv_path or _default_daily_positions_csv_path(trades_path)
     daily_win_loss_chart_path = default_daily_win_loss_chart_path(daily_win_loss_export_path)
     add_on_df = pd.DataFrame(add_on_orders)
     if add_on_df.empty:
@@ -735,6 +811,7 @@ def run(
         )
     add_on_df.to_csv(export_path, index=False)
     _export_daily_win_loss(daily, daily_win_loss_export_path)
+    _export_daily_positions(daily, position_legs, daily_positions_export_path)
     plot_daily_win_loss(daily_win_loss_export_path, daily_win_loss_chart_path)
 
     bucket_counts = executed_trades["position_bucket"].value_counts().to_dict()
@@ -743,11 +820,12 @@ def run(
     cap_label = "unlimited" if max_positions is None else str(max_positions)
 
     print(f"\n{'='*70}")
-    print("  Peak Capital Calculator V4  (index-sized initial buys + fixed add-on buys + holding cap)")
+    print("  Peak Capital Calculator V4.5  (14:30 index-sized initial buys + fixed add-on buys + holding cap)")
     print(f"  Source        : {trades_path}")
     print(f"  Config        : {config_path}")
     print(f"  Add-on CSV    : {export_path}")
     print(f"  Daily W/L CSV : {daily_win_loss_export_path}")
+    print(f"  Daily Pos CSV : {daily_positions_export_path}")
     print(f"  Daily W/L HTML: {daily_win_loss_chart_path}")
     print(f"  Position rule : {POSITION_SCHEME} on {DEFAULT_INDEX_COLUMN}")
     print(f"  Max holdings  : {cap_label}")
@@ -757,11 +835,9 @@ def run(
     print(f"  Index minutes : {index_minute_dir}")
     print(
         "  Index rule    : "
-        f"{SHENZHEN_INDEX_TS_CODE} stable "
-        f"{INDEX_STABLE_START.strftime('%H:%M')}->{INDEX_DECISION_TIME.strftime('%H:%M')}, "
-        f"sizing on {INDEX_DECISION_TIME.strftime('%H:%M')} pct"
+        f"{SHENZHEN_INDEX_TS_CODE} sizing only on "
+        f"{INDEX_DECISION_TIME.strftime('%H:%M')} intraday pct"
     )
-    print(f"  Index tolerance: {index_stability_tolerance_pct:.2f} pct point")
     print(f"  Traded rows   : {len(traded)}")
     print(f"  Opened buys   : {len(executed_trades)}")
     print(f"  Skipped 0x    : {skipped_zero_size}")
@@ -861,6 +937,12 @@ def main() -> None:
         help="Path to export daily win/loss as CSV (default: beside trades CSV).",
     )
     parser.add_argument(
+        "--daily-positions-csv",
+        type=Path,
+        default=None,
+        help="Path to export daily holding and opening lists as CSV (default: beside trades CSV).",
+    )
+    parser.add_argument(
         "--output-txt",
         type=Path,
         default=None,
@@ -871,12 +953,6 @@ def main() -> None:
         type=Path,
         default=DEFAULT_INDEX_MINUTE_DIR,
         help=f"Directory containing {SHENZHEN_INDEX_TS_CODE} minute data (default: {DEFAULT_INDEX_MINUTE_DIR}).",
-    )
-    parser.add_argument(
-        "--index-stability-tolerance-pct",
-        type=float,
-        default=0.0,
-        help="Allowed pct-point dip from the 14:00 index pct change through 14:30 when judging stability (default: 0.0).",
     )
     args = parser.parse_args()
     if args.max_positions is not None and args.max_positions <= 0:
@@ -896,10 +972,10 @@ def main() -> None:
                 args.config.resolve(),
                 args.add_on_csv.resolve() if args.add_on_csv else None,
                 args.daily_win_loss_csv.resolve() if args.daily_win_loss_csv else None,
+                args.daily_positions_csv.resolve() if args.daily_positions_csv else None,
                 args.initial_principal,
                 args.max_positions,
                 args.index_minute_dir.resolve(),
-                args.index_stability_tolerance_pct,
             )
 
 

@@ -79,6 +79,24 @@ ts_code,detect_date,note
 
 ## Run
 
+### Sector radar
+
+Classify and rank the Shenwan 2021 level-1 sectors represented by a supplied stock list:
+
+```bash
+python run_sector_radar.py --stocks inputs/candidates.csv
+python run_sector_radar.py --stocks inputs/candidates.csv --as-of 2025-12-31
+```
+
+The input may be a CSV containing `ts_code`, or a text file containing comma-, space-, or line-separated stock codes. Reports are written under `outputs/sector_radar/<timestamp>/`:
+
+- `sectors.csv`: phase-ordered sectors, momentum/trend metrics, score, and supplied stocks
+- `stocks.csv`: each successfully mapped stock and its sector rank
+- `unmatched_stocks.csv`: stocks without an active SW2021 membership on the radar date
+- `sector_radar.md`: readable ordered summary and phase definitions
+
+Phase thresholds and lookback windows are in `config/sector_radar.yaml`. This command requires Tushare access to `index_classify`, `index_member_all`, and `sw_daily`.
+
 ### Backtest
 
 Run the main strategy over a candidate list:

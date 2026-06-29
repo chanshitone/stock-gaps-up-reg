@@ -32,10 +32,12 @@ class TushareClient:
         self.minute_cache_dir = self.cache_dir / "minute"
         self.calendar_cache_dir = self.cache_dir / "calendar"
         self.stock_cache_dir = self.cache_dir / "stock"
+        self.sector_cache_dir = self.cache_dir / "sector"
         self.daily_cache_dir.mkdir(parents=True, exist_ok=True)
         self.minute_cache_dir.mkdir(parents=True, exist_ok=True)
         self.calendar_cache_dir.mkdir(parents=True, exist_ok=True)
         self.stock_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.sector_cache_dir.mkdir(parents=True, exist_ok=True)
         if self.local_minute_data_dir is None:
             self.local_minute_data_dir = Path(r"D:\BaiduNetdiskDownload\01_2021_min_data")
         self.pro = ts.pro_api(token)
@@ -114,6 +116,103 @@ class TushareClient:
         frame = frame.sort_values("trade_date").reset_index(drop=True)
         frame.to_csv(cache_path, index=False)
         return self._normalize_daily(frame)
+
+    def get_sw_index_classify(self, level: str = "L1", src: str = "SW2021") -> pd.DataFrame:
+        """Return the Shenwan industry index catalogue."""
+        cache_path = self.sector_cache_dir / f"index_classify_{src}_{level}.csv"
+        if cache_path.exists():
+            return pd.read_csv(cache_path, dtype=str).fillna("")
+
+        frame = self._call_api(
+            "index_classify",
+            self.pro.index_classify,
+            level=level,
+            src=src,
+            fields="index_code,industry_name,level,industry_code,is_pub,parent_code,src",
+        )
+        if frame.empty:
+            raise ValueError(f"No Shenwan sector catalogue returned for {src} {level}.")
+        frame = frame.sort_values("index_code").reset_index(drop=True)
+        frame.to_csv(cache_path, index=False, encoding="utf-8-sig")
+        return frame.astype(str).replace("nan", "")
+
+    def get_sw_memberships(self, ts_code: str) -> pd.DataFrame:
+        """Return all Shenwan membership periods for one stock."""
+        normalized_code = ts_code.strip().upper()
+        cache_path = self.sector_cache_dir / f"index_member_all_{normalized_code}.csv"
+        if cache_path.exists():
+            return pd.read_csv(cache_path, dtype=str).fillna("")
+
+        frame = self._call_api(
+            "index_member_all",
+            self.pro.index_member_all,
+            ts_code=normalized_code,
+            fields=(
+                "l1_code,l1_name,l2_code,l2_name,l3_code,l3_name,"
+                "ts_code,name,in_date,out_date,is_new"
+            ),
+        )
+        frame = frame.copy()
+        expected_columns = [
+            "l1_code", "l1_name", "l2_code", "l2_name", "l3_code", "l3_name",
+            "ts_code", "name", "in_date", "out_date", "is_new",
+        ]
+        if frame.empty:
+            frame = pd.DataFrame(columns=expected_columns)
+        if not frame.empty:
+            frame = frame.sort_values(["in_date", "l1_code"]).reset_index(drop=True)
+        frame.to_csv(cache_path, index=False, encoding="utf-8-sig")
+        return frame.astype(str).replace("nan", "")
+
+    def get_sw_l3_members(self, l3_code: str) -> pd.DataFrame:
+        """Return all stock membership periods for one Shenwan level-3 industry."""
+        normalized_code = l3_code.strip().upper()
+        cache_path = self.sector_cache_dir / f"index_member_all_l3_{normalized_code}.csv"
+        if cache_path.exists():
+            return pd.read_csv(cache_path, dtype=str).fillna("")
+
+        frame = self._call_api(
+            "index_member_all",
+            self.pro.index_member_all,
+            l3_code=normalized_code,
+            fields=(
+                "l1_code,l1_name,l2_code,l2_name,l3_code,l3_name,"
+                "ts_code,name,in_date,out_date,is_new"
+            ),
+        )
+        frame = frame.copy()
+        expected_columns = [
+            "l1_code", "l1_name", "l2_code", "l2_name", "l3_code", "l3_name",
+            "ts_code", "name", "in_date", "out_date", "is_new",
+        ]
+        if frame.empty:
+            frame = pd.DataFrame(columns=expected_columns)
+        if not frame.empty:
+            frame = frame.sort_values(["ts_code", "in_date"]).reset_index(drop=True)
+        frame.to_csv(cache_path, index=False, encoding="utf-8-sig")
+        return frame.astype(str).replace("nan", "")
+
+    def get_sw_daily(self, index_code: str, start_date: date, end_date: date) -> pd.DataFrame:
+        """Return daily bars for a Shenwan industry index."""
+        cache_path = self.sector_cache_dir / f"sw_daily_{index_code}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"
+        if cache_path.exists():
+            frame = pd.read_csv(cache_path, dtype={"trade_date": str})
+            return self._normalize_sw_daily(frame)
+
+        frame = self._call_api(
+            "sw_daily",
+            self.pro.sw_daily,
+            ts_code=index_code,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+        )
+        if frame.empty:
+            raise ValueError(
+                f"No Shenwan daily data returned for {index_code} between {start_date} and {end_date}."
+            )
+        frame = frame.sort_values("trade_date").reset_index(drop=True)
+        frame.to_csv(cache_path, index=False, encoding="utf-8-sig")
+        return self._normalize_sw_daily(frame)
 
     def get_stock_basic(self, list_status: str = "L") -> pd.DataFrame:
         cache_path = self.stock_cache_dir / f"stock_basic_{list_status}.csv"
@@ -272,6 +371,8 @@ class TushareClient:
 
     def _raise_if_permission_error(self, endpoint: str, exc: Exception) -> None:
         message = str(exc)
+        if "没有接口" in message:
+            raise PermissionError(f"{endpoint} permission denied: {message}") from exc
         if "每天最多访问该接口" in message:
             raise PermissionError(f"{endpoint} daily quota exceeded or permission too low: {message}") from exc
         if "没有权限" in message or "积分" in message:
@@ -288,6 +389,19 @@ class TushareClient:
         normalized = frame.copy()
         normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], format="%Y%m%d")
         numeric_columns = ["open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"]
+        for column in numeric_columns:
+            if column in normalized.columns:
+                normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+        return normalized.sort_values("trade_date").reset_index(drop=True)
+
+    @staticmethod
+    def _normalize_sw_daily(frame: pd.DataFrame) -> pd.DataFrame:
+        normalized = frame.copy()
+        normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], format="%Y%m%d")
+        numeric_columns = [
+            "open", "high", "low", "close", "change", "pct_change", "vol", "amount",
+            "pe", "pb", "float_mv", "total_mv",
+        ]
         for column in numeric_columns:
             if column in normalized.columns:
                 normalized[column] = pd.to_numeric(normalized[column], errors="coerce")

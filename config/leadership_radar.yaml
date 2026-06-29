@@ -1,0 +1,35 @@
+history_calendar_days: 240
+trend_days: 60
+trend_classification_days: 10
+trend_score_threshold: 3.0
+trend_score_ma_short_days: 5
+trend_score_ma_long_days: 20
+trend_min_improving_days: 6
+
+benchmark_index_code: 000300.SH
+
+rs_short_days: 20
+rs_long_days: 60
+
+new_high_days: 60
+above_ma_days: 20
+volume_ratio_days: 20
+
+leader_return_days: 60
+leader_near_high_days: 20
+leader_near_high_pct: 10.0
+leader_top_n: 3
+
+anchor_top_n: 3
+anchor_ma_short_days: 20
+anchor_ma_long_days: 50
+anchor_amount_short_days: 5
+anchor_amount_long_days: 20
+
+concentration_top_n: 3
+
+strong_leadership_score: 85.0
+leadership_score: 75.0
+candidate_score: 65.0
+theme_score: 55.0
+hot_score: 45.0

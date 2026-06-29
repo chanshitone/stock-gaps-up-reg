@@ -1,0 +1,15 @@
+history_calendar_days: 240
+
+short_return_days: 5
+medium_return_days: 20
+
+fast_ma_days: 20
+slow_ma_days: 60
+volatility_days: 20
+
+# Phase A must gain at least 2% in 5 days and 5% in 20 days.
+phase_a_min_short_return_pct: 2.0
+phase_a_min_medium_return_pct: 5.0
+
+# Phase C requires a 20-day loss worse than -3%.
+phase_c_max_medium_return_pct: -3.0
