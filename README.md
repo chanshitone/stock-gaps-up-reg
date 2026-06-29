@@ -223,6 +223,23 @@ python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --add-on-csv out
 python run_peak_capital_v2.py --trades outputs/<run>/trades.csv --daily-win-loss-csv outputs/<run>/daily_win_loss.csv
 ```
 
+### Peak Capital Version Guide
+
+The newer `run_peak_capital_v*.py` scripts are related, but they are not a simple replacement chain. Use this guide when choosing which one to run:
+
+| Script | When to use it | Main behavior |
+|---|---|---|
+| `run_peak_capital_v4.py` | Baseline index-sized capital model | Uses Shenzhen index sizing with the extra rule that `399001.SZ` must be stable from `14:00` through `14:30` before the day is buyable. Add-on checks start after 5 holding days and can trigger on later days. |
+| `run_peak_capital_v4_5.py` | Most recently edited/reporting-rich variant | Keeps v4 cash-flow logic, but simplifies the index rule to use only the `14:30` index pct change. Adds daily positions CSV and text report output support. |
+| `run_peak_capital_v5_pri_can.py` | Same-day slot prioritization experiments | Keeps v4 sizing and add-on behavior, but when `--max-positions` leaves too few slots for same-day signals, it ranks candidates by `price_vs_vwap`, `vol_ratio_14_30`, `gap_momentum`, and `day1_close_strength`. |
+| `run_peak_capital_v6.py` | Latest numbered strategy variant | Keeps v4 sizing and holding-cap behavior, but changes add-on logic to check only the 6th holding trading day. If it does not trigger on day 6, later holding days are not checked. |
+
+Latest by version number: `run_peak_capital_v6.py`.
+
+Most recently edited file among these variants: `run_peak_capital_v4_5.py`.
+
+Keep `run_peak_capital_v4.py` available because `v5_pri_can` and `v6` import shared helpers from it.
+
 `run_merge_add_on_orders.py`
 
 - Purpose: merge an add-on order CSV with the base trade CSV in an output folder and carry over `initial_stop_price` plus `max_favorable_excursion_r`
