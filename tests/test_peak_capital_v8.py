@@ -4,6 +4,7 @@ import pandas as pd
 
 from run_peak_capital_v8 import (
     ACTIVE_THEME,
+    CANDIDATE_STRONG_THEME,
     HOT_REBOUND,
     LEADERSHIP,
     STRONG_LEADERSHIP,
@@ -22,9 +23,15 @@ class PeakCapitalV8LeadershipTests(unittest.TestCase):
         self.assertTrue(_leadership_allows_entry(LEADERSHIP, TREND_UP))
         self.assertTrue(_leadership_allows_entry(LEADERSHIP, TREND_STABLE))
         self.assertFalse(_leadership_allows_entry(LEADERSHIP, "\u8d8b\u52bf\u5411\u4e0b"))
+        self.assertTrue(_leadership_allows_entry(CANDIDATE_STRONG_THEME, TREND_UP))
+        self.assertTrue(_leadership_allows_entry(CANDIDATE_STRONG_THEME, TREND_STABLE))
+        self.assertFalse(_leadership_allows_entry(CANDIDATE_STRONG_THEME, "\u8d8b\u52bf\u5411\u4e0b"))
         self.assertTrue(_leadership_allows_entry(ACTIVE_THEME, TREND_UP))
+        self.assertTrue(_leadership_allows_entry(ACTIVE_THEME, TREND_STABLE))
+        self.assertFalse(_leadership_allows_entry(ACTIVE_THEME, "\u8d8b\u52bf\u5411\u4e0b"))
         self.assertTrue(_leadership_allows_entry(HOT_REBOUND, TREND_UP))
-        self.assertFalse(_leadership_allows_entry(ACTIVE_THEME, TREND_STABLE))
+        self.assertTrue(_leadership_allows_entry(HOT_REBOUND, TREND_STABLE))
+        self.assertFalse(_leadership_allows_entry(HOT_REBOUND, "\u8d8b\u52bf\u5411\u4e0b"))
         self.assertFalse(_leadership_allows_entry("\u666e\u901a / \u4f11\u7720", TREND_UP))
 
     def test_gate_zeroes_blocked_initial_sizing(self) -> None:

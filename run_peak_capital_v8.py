@@ -5,7 +5,8 @@ This variant keeps the v4.5 cash-flow model and 14:30 Shenzhen index sizing,
 then adds a Leadership Radar gate before initial positions are opened:
     - strong leadership can open directly
     - leadership can open only when the trend is up or stable
-    - active themes and hot/rebound themes can open only when the trend is up
+    - candidate/strong themes, active themes, and hot/rebound themes can open
+      when the trend is up or stable
     - everything else is blocked
 
 Usage:
@@ -61,6 +62,7 @@ from src.stock_gaps_reg.tushare_client import TushareClient
 
 STRONG_LEADERSHIP = "\u5f3a\u4e3b\u7ebf"
 LEADERSHIP = "\u4e3b\u7ebf"
+CANDIDATE_STRONG_THEME = "\u4e3b\u7ebf\u5019\u9009 / \u5f3a\u9898\u6750"
 ACTIVE_THEME = "\u6d3b\u8dc3\u9898\u6750"
 HOT_REBOUND = "\u70ed\u70b9 / \u53cd\u5f39"
 TREND_UP = "\u8d8b\u52bf\u5411\u4e0a"
@@ -78,8 +80,8 @@ def _leadership_allows_entry(status: object, trend: object) -> bool:
         return True
     if status_text == LEADERSHIP:
         return trend_text in {TREND_UP, TREND_STABLE}
-    if status_text in {ACTIVE_THEME, HOT_REBOUND}:
-        return trend_text == TREND_UP
+    if status_text in {CANDIDATE_STRONG_THEME, ACTIVE_THEME, HOT_REBOUND}:
+        return trend_text in {TREND_UP, TREND_STABLE}
     return False
 
 

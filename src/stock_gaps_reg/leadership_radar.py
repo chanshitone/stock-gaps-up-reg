@@ -642,6 +642,7 @@ def calculate_leadership_radar(
                 "industry_rank",
                 "sw_l3_code",
                 "industry_score",
+                "industry_member_count",
                 "leadership_status",
                 "leadership_trend",
                 "rs_20_pct",

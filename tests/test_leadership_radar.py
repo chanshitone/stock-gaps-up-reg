@@ -121,6 +121,7 @@ class LeadershipRadarTests(unittest.TestCase):
         weak_score = float(stocks.loc[stocks["ts_code"] == "000002.SZ", "industry_score"].iloc[0])
         self.assertGreater(strong_score, weak_score)
         self.assertEqual(int(sectors.loc[sectors["sw_l3_code"] == "850001.SI", "industry_member_count"].iloc[0]), 2)
+        self.assertEqual(int(stocks.loc[stocks["ts_code"] == "000001.SZ", "industry_member_count"].iloc[0]), 2)
         self.assertEqual(int(sectors.loc[sectors["sw_l3_code"] == "850001.SI", "metric_stock_count"].iloc[0]), 2)
         self.assertIn("anchor_status_score", sectors.columns)
         self.assertIn("concentration_ratio", sectors.columns)
