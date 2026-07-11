@@ -29,6 +29,6 @@ exit:
 
 data:
   minute_freq: 1min
-  minute_data_dir: D:\BaiduNetdiskDownload\2605\stk_mins-2605\stk_mins
+  minute_data_dir: C:\Users\chans\Downloads\夸克\1min\stock_1min
   cache_dir: data/cache
   output_dir: outputs

@@ -13,6 +13,12 @@ import pyarrow.dataset as ds
 import tushare as ts
 
 
+DEFAULT_LOCAL_MINUTE_DATA_DIRS = (
+    Path(r"C:\Users\chans\Downloads\夸克\1min\stock_1min"),
+    Path(r"D:\BaiduNetdiskDownload\01_2021_min_data"),
+)
+
+
 @dataclass
 class TushareClient:
     cache_dir: Path
@@ -39,7 +45,10 @@ class TushareClient:
         self.stock_cache_dir.mkdir(parents=True, exist_ok=True)
         self.sector_cache_dir.mkdir(parents=True, exist_ok=True)
         if self.local_minute_data_dir is None:
-            self.local_minute_data_dir = Path(r"D:\BaiduNetdiskDownload\01_2021_min_data")
+            self.local_minute_data_dir = next(
+                (candidate for candidate in DEFAULT_LOCAL_MINUTE_DATA_DIRS if candidate.exists()),
+                DEFAULT_LOCAL_MINUTE_DATA_DIRS[0],
+            )
         self.pro = ts.pro_api(token)
 
     def get_trade_calendar(self, start_date: date, end_date: date) -> pd.DataFrame:
@@ -285,6 +294,9 @@ class TushareClient:
         csv_path = self.local_minute_data_dir / f"stk_mins_{trade_date:%Y%m%d}.csv"
         if csv_path.exists():
             return self._load_minutes_from_daily_csv(csv_path, ts_code)
+        single_stock_parquet_path = self.local_minute_data_dir / f"{ts_code}.parquet"
+        if single_stock_parquet_path.exists():
+            return self._load_minutes_from_single_stock_parquet(single_stock_parquet_path, ts_code, trade_date)
         return self._load_minutes_from_parquet(ts_code, trade_date, freq)
 
     def _load_minutes_from_daily_csv(self, path: Path, ts_code: str) -> pd.DataFrame:
@@ -294,6 +306,32 @@ class TushareClient:
         if not matches:
             return pd.DataFrame(columns=["trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount"])
         frame = pd.concat(matches, ignore_index=True)
+        return frame[["trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount"]]
+
+    def _load_minutes_from_single_stock_parquet(self, path: Path, ts_code: str, trade_date: date) -> pd.DataFrame:
+        start_dt = datetime.combine(trade_date, datetime.min.time())
+        end_dt = start_dt + timedelta(days=1)
+        dataset = ds.dataset(str(path), format="parquet")
+        available_columns = set(dataset.schema.names)
+        if "trade_time" not in available_columns:
+            raise ValueError(f"Single-stock parquet is missing trade_time: {path}")
+
+        columns = [
+            column
+            for column in ("trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount")
+            if column in available_columns
+        ]
+        frame = dataset.to_table(
+            columns=columns,
+            filter=(ds.field("trade_time") >= start_dt) & (ds.field("trade_time") < end_dt),
+        ).to_pandas()
+        if frame.empty:
+            return pd.DataFrame(columns=["trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount"])
+
+        if "trade_time" not in frame.columns:
+            frame = frame.reset_index()
+        if "ts_code" not in frame.columns:
+            frame["ts_code"] = ts_code
         return frame[["trade_time", "ts_code", "open", "close", "high", "low", "vol", "amount"]]
 
     def _load_minutes_from_parquet(self, ts_code: str, trade_date: date, freq: str) -> pd.DataFrame:

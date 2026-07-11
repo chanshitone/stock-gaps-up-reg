@@ -31,7 +31,7 @@ trade recorded in the trades CSV.
 
 Usage:
     python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv
-    python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --per-trade 15000 --add-on-per-trade 20000
+    python run_peak_capital_v4_5.py --trades outputs/20260707_192137/trades.csv --per-trade 20000 --add-on-per-trade 0 --max-positions 8
     python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --max-positions 10
     python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --max-positions 10 --initial-principal 132470
     python run_peak_capital_v4_5.py --trades outputs/<run>/trades.csv --config config/strategy.yaml
@@ -61,13 +61,18 @@ from src.stock_gaps_reg.tushare_client import TushareClient
 DEFAULT_PER_TRADE = 15000.0
 DEFAULT_INDEX_COLUMN = "entry_shenzhen_index_pct_chg"
 INDEX_1430_COLUMN = "entry_shenzhen_index_1430_pct_chg"
-DEFAULT_INDEX_MINUTE_DIR = Path(r"D:\BaiduNetdiskDownload\指数分时")
+DEFAULT_INDEX_MINUTE_DIR = Path("outputs/index_mins/399001_SZ_1min_202606.csv")
+FALLBACK_INDEX_MINUTE_DIR = Path("D:/BaiduNetdiskDownload/\u6307\u6570\u5206\u65f6")
 SHENZHEN_INDEX_CODE = "399001"
 SHENZHEN_INDEX_TS_CODE = "399001.SZ"
 INDEX_DECISION_TIME = time(hour=14, minute=30)
 POSITION_SCHEME = (0.0, 0.7, 1.3)
 ADD_ON_MIN_HOLD_DAYS = 6
 ADD_ON_TRIGGER_R = 1.0
+
+
+def _display_path(path: Path) -> str:
+    return str(path).encode("unicode_escape").decode("ascii")
 
 
 def _default_add_on_csv_path(trades_path: Path) -> Path:
@@ -139,36 +144,64 @@ def _read_index_minute_zip_entry(zip_path: Path, entry_name: str) -> pd.DataFram
             return pd.read_csv(handle, encoding="utf-8-sig")
 
 
-def _load_index_minutes_for_date(index_minute_dir: Path, trade_date: date) -> pd.DataFrame:
-    direct_csv = index_minute_dir / f"{SHENZHEN_INDEX_CODE}.csv"
-    if direct_csv.exists():
-        return _read_index_minute_csv(direct_csv)
+def _resolve_index_minute_source(index_minute_dir: Path, trade_date: date) -> tuple[str, Path, str | None]:
+    if index_minute_dir.is_file():
+        return ("csv", index_minute_dir, None)
+
+    candidate_csvs = (
+        index_minute_dir / f"{SHENZHEN_INDEX_CODE}.csv",
+        index_minute_dir / f"{SHENZHEN_INDEX_CODE}_SZ_1min_{trade_date:%Y%m}.csv",
+        index_minute_dir / f"{SHENZHEN_INDEX_TS_CODE}_1min_{trade_date:%Y%m}.csv",
+    )
+    for csv_path in candidate_csvs:
+        if csv_path.exists():
+            return ("csv", csv_path, None)
 
     year_zip = index_minute_dir / f"{trade_date.year}_1min.zip"
     year_entry = f"{SHENZHEN_INDEX_CODE}_{trade_date.year}.csv"
     if year_zip.exists():
-        return _read_index_minute_zip_entry(year_zip, year_entry)
+        return ("zip", year_zip, year_entry)
 
     day_zip = index_minute_dir / f"{trade_date:%Y%m%d}_1min.zip"
     if day_zip.exists():
-        return _read_index_minute_zip_entry(day_zip, f"{SHENZHEN_INDEX_CODE}.csv")
+        return ("zip", day_zip, f"{SHENZHEN_INDEX_CODE}.csv")
 
     raise FileNotFoundError(
         f"Missing {SHENZHEN_INDEX_TS_CODE} minute data for {trade_date}: "
-        f"expected {direct_csv}, {year_zip}, or {day_zip}"
+        f"expected one of {', '.join(str(path) for path in candidate_csvs)}, {year_zip}, or {day_zip}"
     )
 
 
-def _normalize_index_minutes(raw: pd.DataFrame) -> pd.DataFrame:
-    required = {"时间", "开盘价", "收盘价"}
-    missing = required.difference(raw.columns)
-    if missing:
-        raise ValueError(f"Index minute CSV is missing required columns: {sorted(missing)}")
+def _index_minute_roots(index_minute_dir: Path) -> list[Path]:
+    roots = [index_minute_dir]
+    if FALLBACK_INDEX_MINUTE_DIR.exists() and FALLBACK_INDEX_MINUTE_DIR.resolve() != index_minute_dir.resolve():
+        roots.append(FALLBACK_INDEX_MINUTE_DIR)
+    return roots
 
+
+def _load_index_minutes_for_date(index_minute_dir: Path, trade_date: date) -> pd.DataFrame:
+    source_kind, source_path, entry_name = _resolve_index_minute_source(index_minute_dir, trade_date)
+    if source_kind == "csv":
+        return _read_index_minute_csv(source_path)
+    assert entry_name is not None
+    return _read_index_minute_zip_entry(source_path, entry_name)
+
+
+def _normalize_index_minutes(raw: pd.DataFrame) -> pd.DataFrame:
     minutes = raw.copy()
-    minutes["trade_time"] = pd.to_datetime(minutes["时间"], errors="coerce")
-    minutes["open"] = pd.to_numeric(minutes["开盘价"], errors="coerce")
-    minutes["close"] = pd.to_numeric(minutes["收盘价"], errors="coerce")
+    if {"时间", "开盘价", "收盘价"}.issubset(minutes.columns):
+        minutes["trade_time"] = pd.to_datetime(minutes["时间"], errors="coerce")
+        minutes["open"] = pd.to_numeric(minutes["开盘价"], errors="coerce")
+        minutes["close"] = pd.to_numeric(minutes["收盘价"], errors="coerce")
+    elif {"trade_time", "open", "close"}.issubset(minutes.columns):
+        minutes["trade_time"] = pd.to_datetime(minutes["trade_time"], errors="coerce")
+        minutes["open"] = pd.to_numeric(minutes["open"], errors="coerce")
+        minutes["close"] = pd.to_numeric(minutes["close"], errors="coerce")
+    else:
+        raise ValueError(
+            "Index minute CSV is missing required columns; expected either "
+            "['时间', '开盘价', '收盘价'] or ['trade_time', 'open', 'close']."
+        )
     return minutes.dropna(subset=["trade_time", "open", "close"]).sort_values("trade_time").reset_index(drop=True)
 
 
@@ -191,39 +224,45 @@ def _build_index_condition_map(
         }
     )
     result: dict[date, dict[str, object]] = {}
-    cached_by_year: dict[int, pd.DataFrame] = {}
+    cached_sources: dict[str, pd.DataFrame] = {}
 
     for buy_date in buy_dates:
-        year_zip = index_minute_dir / f"{buy_date.year}_1min.zip"
-        direct_csv = index_minute_dir / f"{SHENZHEN_INDEX_CODE}.csv"
-        if direct_csv.exists() or year_zip.exists():
-            if buy_date.year not in cached_by_year:
-                cached_by_year[buy_date.year] = _normalize_index_minutes(_load_index_minutes_for_date(index_minute_dir, buy_date))
-            minutes = cached_by_year[buy_date.year]
-        else:
-            minutes = _normalize_index_minutes(_load_index_minutes_for_date(index_minute_dir, buy_date))
-        day_minutes = minutes[minutes["trade_time"].dt.date == buy_date].copy()
-        if day_minutes.empty:
-            result[buy_date] = {
-                DEFAULT_INDEX_COLUMN: float("nan"),
-                INDEX_1430_COLUMN: float("nan"),
-            }
-            continue
-
-        open_price = float(day_minutes.iloc[0]["open"])
-        bar_1430 = _index_bar_at_or_before(day_minutes, INDEX_DECISION_TIME)
-        if open_price <= 0 or bar_1430 is None:
-            result[buy_date] = {
-                DEFAULT_INDEX_COLUMN: float("nan"),
-                INDEX_1430_COLUMN: float("nan"),
-            }
-            continue
-
-        pct_1430 = (float(bar_1430["close"]) / open_price - 1.0) * 100.0
         result[buy_date] = {
-            DEFAULT_INDEX_COLUMN: pct_1430,
-            INDEX_1430_COLUMN: pct_1430,
+            DEFAULT_INDEX_COLUMN: float("nan"),
+            INDEX_1430_COLUMN: float("nan"),
         }
+
+        for root in _index_minute_roots(index_minute_dir):
+            try:
+                source_kind, source_path, entry_name = _resolve_index_minute_source(root, buy_date)
+            except FileNotFoundError:
+                continue
+
+            cache_key = f"{source_kind}:{source_path}:{entry_name or ''}"
+            if cache_key not in cached_sources:
+                if source_kind == "csv":
+                    raw_minutes = _read_index_minute_csv(source_path)
+                else:
+                    assert entry_name is not None
+                    raw_minutes = _read_index_minute_zip_entry(source_path, entry_name)
+                cached_sources[cache_key] = _normalize_index_minutes(raw_minutes)
+
+            minutes = cached_sources[cache_key]
+            day_minutes = minutes[minutes["trade_time"].dt.date == buy_date].copy()
+            if day_minutes.empty:
+                continue
+
+            open_price = float(day_minutes.iloc[0]["open"])
+            bar_1430 = _index_bar_at_or_before(day_minutes, INDEX_DECISION_TIME)
+            if open_price <= 0 or bar_1430 is None:
+                continue
+
+            pct_1430 = (float(bar_1430["close"]) / open_price - 1.0) * 100.0
+            result[buy_date] = {
+                DEFAULT_INDEX_COLUMN: pct_1430,
+                INDEX_1430_COLUMN: pct_1430,
+            }
+            break
 
     return result
 
@@ -833,6 +872,8 @@ def run(
     print(f"  Add-on trade  : ¥{resolved_add_on_per_trade:,.0f}")
     print(f"  Initial cash  : ¥{starting_principal:,.0f}")
     print(f"  Index minutes : {index_minute_dir}")
+    if FALLBACK_INDEX_MINUTE_DIR.exists() and FALLBACK_INDEX_MINUTE_DIR.resolve() != index_minute_dir.resolve():
+        print(f"  Index fallback: {_display_path(FALLBACK_INDEX_MINUTE_DIR)}")
     print(
         "  Index rule    : "
         f"{SHENZHEN_INDEX_TS_CODE} sizing only on "
@@ -952,7 +993,10 @@ def main() -> None:
         "--index-minute-dir",
         type=Path,
         default=DEFAULT_INDEX_MINUTE_DIR,
-        help=f"Directory containing {SHENZHEN_INDEX_TS_CODE} minute data (default: {DEFAULT_INDEX_MINUTE_DIR}).",
+        help=(
+            f"Directory or CSV file containing {SHENZHEN_INDEX_TS_CODE} minute data "
+            f"(default: {DEFAULT_INDEX_MINUTE_DIR}; fallback: {_display_path(FALLBACK_INDEX_MINUTE_DIR)})."
+        ),
     )
     args = parser.parse_args()
     if args.max_positions is not None and args.max_positions <= 0:

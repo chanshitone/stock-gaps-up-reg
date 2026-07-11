@@ -3,6 +3,7 @@ pandas>=2.2
 numpy>=2.0
 plotly>=6.0
 pyarrow>=18.0
+minishare>=0.1009.0
 tushare>=1.2
 PyYAML>=6.0
 python-dotenv>=1.0

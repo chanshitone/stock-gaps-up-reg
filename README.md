@@ -120,7 +120,7 @@ Reports are written to `outputs/<timestamp>/` by default.
 - Input: candidate CSV with `ts_code` and `detect_date`
 
 ```bash
-python run_backtest.py --candidates inputs/candidates_b.csv
+python run_backtest.py --candidates outputs\discover_candidates\20260707_173439\candidates.csv inputs/candidates_b.csv
 python run_backtest.py --candidates inputs/candidates.csv --config config/strategy.yaml
 python run_backtest.py --candidates inputs/candidates.csv --output-dir outputs/rerun
 ```
